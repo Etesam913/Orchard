@@ -1,0 +1,14 @@
+# macOS
+.DS_Store
+
+# Xcode build output and per-user state
+build/
+DerivedData/
+xcuserdata/
+
+# Prebuilt Ghostty framework (~540 MB artifact; rebuild from Ghostty source — see README)
+GhosttyKit.xcframework/
+
+# Local agent/tool state
+.antigravitycli/
+.claude/settings.local.json

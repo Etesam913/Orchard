@@ -1,0 +1,731 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Orchard Diff Viewer</title>
+    <style>
+        :root {
+            color-scheme: light dark;
+            background: transparent;
+            color: CanvasText;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+            --diff-border: color-mix(in srgb, CanvasText 14%, transparent);
+            --diff-soft-border: color-mix(in srgb, CanvasText 9%, transparent);
+            /* Opaque: the sticky file header sits over scrolling diff rows
+               and would otherwise let their colour bleed through. Mixing
+               into Canvas (rather than transparent) keeps the same visual
+               tone while giving us a solid backdrop. */
+            --diff-header-bg: color-mix(in srgb, CanvasText 6%, Canvas);
+            --diff-gutter-fg: color-mix(in srgb, CanvasText 45%, transparent);
+            --diff-hunk-fg: color-mix(in srgb, CanvasText 55%, transparent);
+            --diff-hunk-bg: color-mix(in srgb, CanvasText 4%, transparent);
+
+            --diff-add-fg: light-dark(#1a7f37, #82e08a);
+            --diff-add-bg: light-dark(#dafbe1, color-mix(in srgb, #2ea043 18%, transparent));
+            --diff-add-gutter: light-dark(#aceebb, color-mix(in srgb, #2ea043 35%, transparent));
+
+            --diff-del-fg: light-dark(#d1242f, #ff8a87);
+            --diff-del-bg: light-dark(#ffebe9, color-mix(in srgb, #f85149 18%, transparent));
+            --diff-del-gutter: light-dark(#ffc1bf, color-mix(in srgb, #f85149 35%, transparent));
+        }
+
+        html, body {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            background: transparent;
+        }
+
+        body {
+            overflow: auto;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
+        #root {
+            box-sizing: border-box;
+            width: 100%;
+            min-height: 100%;
+            padding: 12px;
+        }
+
+        .message {
+            box-sizing: border-box;
+            margin: 0 0 12px;
+            padding: 10px 12px;
+            border: 1px solid var(--diff-border);
+            border-radius: 6px;
+            color: color-mix(in srgb, CanvasText 72%, transparent);
+            background: color-mix(in srgb, Canvas 72%, transparent);
+            line-height: 1.4;
+            white-space: pre-wrap;
+        }
+
+        .patch-file {
+            margin: 0 0 12px;
+            border: 1px solid var(--diff-border);
+            border-radius: 6px;
+            /* `clip` keeps the rounded-corner clipping that `hidden` gave us
+               without establishing a scroll container — `hidden` would make
+               the sticky header pin to this box (which never scrolls) instead
+               of to the body viewport. */
+            overflow: clip;
+            background: Canvas;
+        }
+
+        .patch-file-header {
+            padding: 0;
+            font-size: 11px;
+            font-weight: 600;
+            color: color-mix(in srgb, CanvasText 85%, transparent);
+            background: var(--diff-header-bg);
+            border-bottom: 1px solid var(--diff-soft-border);
+            display: flex;
+            align-items: stretch;
+            gap: 0;
+            min-width: 0;
+            position: sticky;
+            top: 0;
+            z-index: 1;
+        }
+
+        .patch-file.collapsed .patch-file-header {
+            border-bottom: none;
+        }
+
+        .patch-file-toggle {
+            display: inline-flex;
+            align-items: center;
+            justify-content: flex-start;
+            flex: 1 1 auto;
+            min-width: 0;
+            gap: 8px;
+            padding: 6px 10px;
+            background: transparent;
+            border: 0;
+            color: inherit;
+            font: inherit;
+            text-align: left;
+        }
+
+        .patch-file-toggle:hover {
+            background: color-mix(in srgb, CanvasText 5%, transparent);
+        }
+
+        .patch-file-toggle:focus-visible {
+            outline: 2px solid color-mix(in srgb, CanvasText 50%, transparent);
+            outline-offset: -2px;
+        }
+
+        .patch-file-toggle .chevron {
+            flex: 0 0 auto;
+            width: 10px;
+            height: 10px;
+            display: inline-block;
+            transition: transform 0.15s ease;
+            color: color-mix(in srgb, CanvasText 60%, transparent);
+        }
+
+        .patch-file.collapsed .patch-file-toggle .chevron {
+            transform: rotate(-90deg);
+        }
+
+        .patch-file-toggle .path {
+            flex: 1 1 auto;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .patch-file-trailing {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 10px;
+            flex: 0 0 auto;
+        }
+
+        .patch-file-header .badge {
+            flex: 0 0 auto;
+            font-size: 10px;
+            font-weight: 600;
+            padding: 1px 6px;
+            border-radius: 999px;
+            background: color-mix(in srgb, CanvasText 8%, transparent);
+            color: color-mix(in srgb, CanvasText 75%, transparent);
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        .patch-file-header .badge.added { background: var(--diff-add-bg); color: var(--diff-add-fg); }
+        .patch-file-header .badge.deleted { background: var(--diff-del-bg); color: var(--diff-del-fg); }
+        .patch-file-header .badge.renamed { background: color-mix(in srgb, #ffd34d 25%, transparent); color: light-dark(#7a5d00, #ffd34d); }
+
+        .open-in-editor {
+            flex: 0 0 auto;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 22px;
+            height: 22px;
+            padding: 0;
+            border: 0;
+            border-radius: 4px;
+            background: transparent;
+            color: color-mix(in srgb, CanvasText 55%, transparent);
+            cursor: pointer;
+        }
+        .open-in-editor:hover {
+            background: color-mix(in srgb, CanvasText 10%, transparent);
+            color: CanvasText;
+        }
+        .open-in-editor:focus-visible {
+            outline: 2px solid color-mix(in srgb, CanvasText 50%, transparent);
+            outline-offset: -2px;
+        }
+        .open-in-editor svg { width: 14px; height: 14px; display: block; }
+
+        .patch-file-binary {
+            padding: 10px 12px;
+            color: color-mix(in srgb, CanvasText 65%, transparent);
+            font-style: italic;
+        }
+
+        .patch-file-body {
+            overflow: hidden;
+        }
+
+        .patch-file.collapsed .patch-file-body {
+            display: none;
+        }
+
+        .diff-stat {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+        }
+
+        .diff-stat .add { color: var(--diff-add-fg); }
+        .diff-stat .del { color: var(--diff-del-fg); }
+
+        .hunks {
+            overflow-x: auto;
+        }
+
+        .diff-table {
+            border-collapse: collapse;
+            width: 100%;
+            min-width: max-content;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .diff-table td {
+            padding: 0;
+            vertical-align: top;
+        }
+
+        .hunk-header-row > td {
+            padding: 2px 10px;
+            font-size: 11px;
+            color: var(--diff-hunk-fg);
+            background: var(--diff-hunk-bg);
+            border-top: 1px solid var(--diff-soft-border);
+            border-bottom: 1px solid var(--diff-soft-border);
+            white-space: pre;
+        }
+
+        .hunk-header-row:first-child > td {
+            border-top: none;
+        }
+
+        .diff-row > .gutter {
+            width: 1%;
+            padding: 0 6px;
+            text-align: right;
+            color: var(--diff-gutter-fg);
+            user-select: none;
+            font-size: 11px;
+            white-space: nowrap;
+            background: color-mix(in srgb, CanvasText 2%, transparent);
+            border-right: 1px solid var(--diff-soft-border);
+        }
+
+        .diff-row > .content {
+            padding: 0 10px;
+            white-space: pre;
+            min-width: 0;
+            width: 100%;
+        }
+
+        .diff-row.add > td { background: var(--diff-add-bg); color: var(--diff-add-fg); }
+        .diff-row.add > .gutter { background: var(--diff-add-gutter); color: var(--diff-add-fg); }
+
+        .diff-row.del > td { background: var(--diff-del-bg); color: var(--diff-del-fg); }
+        .diff-row.del > .gutter { background: var(--diff-del-gutter); color: var(--diff-del-fg); }
+
+        .diff-row.context > .content { color: CanvasText; }
+
+        .diff-row.nonewline > .content {
+            color: var(--diff-hunk-fg);
+            font-style: italic;
+        }
+
+        /* Render the +/-/space markers via pseudo-content so they're not
+           included when the user selects (and auto-copies) a line — the
+           pasted text is clean code, paste-able straight into a terminal. */
+        .diff-row > .content::before {
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        .diff-row.add > .content::before { content: "+ "; }
+        .diff-row.del > .content::before { content: "- "; }
+        .diff-row.context > .content::before { content: "  "; }
+    </style>
+</head>
+<body>
+    <main id="root">
+        <div class="message">Loading diff…</div>
+    </main>
+
+    <script>
+        (function () {
+            const root = () => document.getElementById("root");
+
+            function setMessage(text) {
+                const r = root();
+                r.innerHTML = "";
+                const div = document.createElement("div");
+                div.className = "message";
+                div.textContent = text;
+                r.appendChild(div);
+            }
+
+            // Parse a unified-diff string into an array of files.
+            // Handles both git-style (`diff --git a/x b/y`) and plain
+            // unified diffs (`--- a/x` / `+++ b/y`).
+            function parseUnifiedDiff(input) {
+                if (!input) return [];
+                const text = input.replace(/\r\n/g, "\n");
+                const lines = text.split("\n");
+
+                const files = [];
+                let file = null;
+                let hunk = null;
+                let oldLine = 0;
+                let newLine = 0;
+
+                function startFile() {
+                    file = {
+                        oldPath: null,
+                        newPath: null,
+                        mode: "modified", // "added" | "deleted" | "renamed" | "modified" | "binary"
+                        binary: false,
+                        hunks: []
+                    };
+                    files.push(file);
+                    hunk = null;
+                }
+
+                function startHunkFromHeader(header) {
+                    const m = header.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/);
+                    if (!m) return false;
+                    oldLine = parseInt(m[1], 10);
+                    newLine = parseInt(m[3], 10);
+                    hunk = { header, rows: [] };
+                    if (!file) startFile();
+                    file.hunks.push(hunk);
+                    return true;
+                }
+
+                for (let i = 0; i < lines.length; i++) {
+                    const line = lines[i];
+
+                    if (line.startsWith("diff --git ")) {
+                        startFile();
+                        const m = line.match(/^diff --git a\/(.+?) b\/(.+)$/);
+                        if (m) {
+                            file.oldPath = m[1];
+                            file.newPath = m[2];
+                        }
+                        continue;
+                    }
+
+                    if (line.startsWith("--- ")) {
+                        if (!file) startFile();
+                        hunk = null;
+                        const path = line.slice(4).replace(/^"?[ab]\//, "").replace(/"$/, "");
+                        if (path === "/dev/null") {
+                            file.mode = "added";
+                        } else {
+                            file.oldPath = file.oldPath || path;
+                        }
+                        continue;
+                    }
+
+                    if (line.startsWith("+++ ")) {
+                        if (!file) startFile();
+                        hunk = null;
+                        const path = line.slice(4).replace(/^"?[ab]\//, "").replace(/"$/, "");
+                        if (path === "/dev/null") {
+                            file.mode = "deleted";
+                        } else {
+                            file.newPath = file.newPath || path;
+                        }
+                        continue;
+                    }
+
+                    if (line.startsWith("new file mode")) {
+                        if (file) file.mode = "added";
+                        continue;
+                    }
+                    if (line.startsWith("deleted file mode")) {
+                        if (file) file.mode = "deleted";
+                        continue;
+                    }
+                    if (line.startsWith("rename from ")) {
+                        if (file) {
+                            file.mode = "renamed";
+                            file.oldPath = line.slice("rename from ".length).trim();
+                        }
+                        continue;
+                    }
+                    if (line.startsWith("rename to ")) {
+                        if (file) {
+                            file.mode = "renamed";
+                            file.newPath = line.slice("rename to ".length).trim();
+                        }
+                        continue;
+                    }
+                    if (line.startsWith("Binary files ") || line.includes("GIT binary patch")) {
+                        if (!file) startFile();
+                        file.binary = true;
+                        continue;
+                    }
+
+                    if (line.startsWith("@@")) {
+                        startHunkFromHeader(line);
+                        continue;
+                    }
+
+                    if (!hunk) continue;
+
+                    const ch = line[0];
+                    if (ch === "+") {
+                        hunk.rows.push({ kind: "add", oldNo: null, newNo: newLine, text: line.slice(1) });
+                        newLine++;
+                    } else if (ch === "-") {
+                        hunk.rows.push({ kind: "del", oldNo: oldLine, newNo: null, text: line.slice(1) });
+                        oldLine++;
+                    } else if (ch === "\\") {
+                        // "\ No newline at end of file"
+                        hunk.rows.push({ kind: "nonewline", oldNo: null, newNo: null, text: line });
+                    } else {
+                        // Context: leading space, or empty line within a hunk.
+                        const text = ch === " " ? line.slice(1) : line;
+                        hunk.rows.push({ kind: "context", oldNo: oldLine, newNo: newLine, text });
+                        oldLine++;
+                        newLine++;
+                    }
+                }
+
+                // Post-process: if a file has both old and new path with no
+                // explicit mode change, leave as "modified". If one is missing,
+                // infer add/delete.
+                for (const f of files) {
+                    if (f.binary) f.mode = "binary";
+                    if (!f.mode || f.mode === "modified") {
+                        if (!f.oldPath && f.newPath) f.mode = "added";
+                        else if (f.oldPath && !f.newPath) f.mode = "deleted";
+                    }
+                }
+
+                return files;
+            }
+
+            // Trim a slash-separated path to its last 3 segments, prefixed
+            // with "…/" when we dropped anything. Repo-relative paths like
+            // `a/b/c.swift` stay untouched.
+            function shortenPath(path) {
+                if (!path) return path;
+                const segs = path.split("/").filter(Boolean);
+                if (segs.length <= 3) return path;
+                return "…/" + segs.slice(-3).join("/");
+            }
+
+            function countStats(file) {
+                let adds = 0, dels = 0;
+                for (const hunk of file.hunks) {
+                    for (const row of hunk.rows) {
+                        if (row.kind === "add") adds++;
+                        else if (row.kind === "del") dels++;
+                    }
+                }
+                return { adds, dels };
+            }
+
+            // VSCode mark — simplified two-shape silhouette of the official
+            // logo. Stays recognisable at 14px without shipping a binary
+            // asset or pulling in @vscode/codicons.
+            function vscodeIconSVG() {
+                const NS = "http://www.w3.org/2000/svg";
+                const svg = document.createElementNS(NS, "svg");
+                svg.setAttribute("viewBox", "0 0 100 100");
+                svg.setAttribute("fill", "none");
+                svg.setAttribute("aria-hidden", "true");
+                const path = document.createElementNS(NS, "path");
+                path.setAttribute(
+                    "d",
+                    "M70 8 L92 18 V82 L70 92 L30 60 L14 72 L8 68 V32 L14 28 L30 40 Z M70 30 L40 50 L70 70 Z"
+                );
+                path.setAttribute("fill", "currentColor");
+                path.setAttribute("fill-rule", "evenodd");
+                svg.appendChild(path);
+                return svg;
+            }
+
+            function chevronSVG() {
+                const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+                svg.setAttribute("class", "chevron");
+                svg.setAttribute("viewBox", "0 0 10 10");
+                svg.setAttribute("fill", "none");
+                svg.setAttribute("aria-hidden", "true");
+                const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                path.setAttribute("d", "M2 3.5 L5 6.5 L8 3.5");
+                path.setAttribute("stroke", "currentColor");
+                path.setAttribute("stroke-width", "1.5");
+                path.setAttribute("stroke-linecap", "round");
+                path.setAttribute("stroke-linejoin", "round");
+                svg.appendChild(path);
+                return svg;
+            }
+
+            function renderFile(file, index) {
+                const section = document.createElement("section");
+                section.className = "patch-file";
+                section.dataset.fileIndex = String(index);
+
+                const header = document.createElement("header");
+                header.className = "patch-file-header";
+
+                const toggle = document.createElement("button");
+                toggle.type = "button";
+                toggle.className = "patch-file-toggle";
+                toggle.setAttribute("aria-expanded", "true");
+                toggle.appendChild(chevronSVG());
+
+                const path = document.createElement("span");
+                path.className = "path";
+                if (file.mode === "renamed" && file.oldPath && file.newPath && file.oldPath !== file.newPath) {
+                    path.textContent = `${shortenPath(file.oldPath)} → ${shortenPath(file.newPath)}`;
+                    path.title = `${file.oldPath} → ${file.newPath}`;
+                } else {
+                    const full = file.newPath || file.oldPath || "(unknown)";
+                    path.textContent = shortenPath(full);
+                    // Hover tooltip with the full path — only useful when we
+                    // actually truncated something.
+                    if (path.textContent !== full) path.title = full;
+                }
+                toggle.appendChild(path);
+                header.appendChild(toggle);
+
+                const trailing = document.createElement("span");
+                trailing.className = "patch-file-trailing";
+
+                if (!file.binary && file.hunks.length > 0) {
+                    const { adds, dels } = countStats(file);
+                    const stat = document.createElement("span");
+                    stat.className = "diff-stat";
+                    if (adds > 0) {
+                        const a = document.createElement("span");
+                        a.className = "add";
+                        a.textContent = `+${adds}`;
+                        stat.appendChild(a);
+                    }
+                    if (adds > 0 && dels > 0) stat.appendChild(document.createTextNode(" "));
+                    if (dels > 0) {
+                        const d = document.createElement("span");
+                        d.className = "del";
+                        d.textContent = `−${dels}`;
+                        stat.appendChild(d);
+                    }
+                    if (adds > 0 || dels > 0) trailing.appendChild(stat);
+                }
+
+                if (file.mode && file.mode !== "modified") {
+                    const badge = document.createElement("span");
+                    badge.className = `badge ${file.mode}`;
+                    badge.textContent = file.mode;
+                    trailing.appendChild(badge);
+                }
+
+                // "Open in VS Code" — sits next to the diff stat. Hidden for
+                // deleted files (nothing to open at the new path) and when
+                // we lack a path to resolve against the project root.
+                const openTarget = file.newPath || file.oldPath;
+                if (openTarget && file.mode !== "deleted") {
+                    const openBtn = document.createElement("button");
+                    openBtn.type = "button";
+                    openBtn.className = "open-in-editor";
+                    openBtn.title = "Open in VS Code";
+                    openBtn.setAttribute("aria-label", "Open in VS Code");
+                    openBtn.appendChild(vscodeIconSVG());
+                    openBtn.addEventListener("click", (event) => {
+                        // Header is itself a button; without this the file
+                        // would collapse/expand on every "open" click.
+                        event.stopPropagation();
+                        try {
+                            window.webkit.messageHandlers.orchardOpenInEditor.postMessage({ path: openTarget });
+                        } catch (_) { /* bridge unavailable — non-fatal */ }
+                    });
+                    trailing.appendChild(openBtn);
+                }
+
+                if (trailing.childNodes.length > 0) {
+                    header.appendChild(trailing);
+                }
+
+                section.appendChild(header);
+
+                const body = document.createElement("div");
+                body.className = "patch-file-body";
+
+                if (file.binary) {
+                    const div = document.createElement("div");
+                    div.className = "patch-file-binary";
+                    div.textContent = "Binary file";
+                    body.appendChild(div);
+                } else if (file.hunks.length === 0) {
+                    const div = document.createElement("div");
+                    div.className = "patch-file-binary";
+                    div.textContent = "No textual changes.";
+                    body.appendChild(div);
+                } else {
+                    const hunksWrap = document.createElement("div");
+                    hunksWrap.className = "hunks";
+
+                    const table = document.createElement("table");
+                    table.className = "diff-table";
+                    const tbody = document.createElement("tbody");
+                    table.appendChild(tbody);
+
+                    for (const hunk of file.hunks) {
+                        const headerRow = document.createElement("tr");
+                        headerRow.className = "hunk-header-row";
+                        const headerCell = document.createElement("td");
+                        headerCell.colSpan = 3;
+                        headerCell.textContent = hunk.header;
+                        headerRow.appendChild(headerCell);
+                        tbody.appendChild(headerRow);
+
+                        for (const row of hunk.rows) {
+                            const tr = document.createElement("tr");
+                            tr.className = `diff-row ${row.kind}`;
+
+                            const oldNo = document.createElement("td");
+                            oldNo.className = "gutter old";
+                            oldNo.textContent = row.oldNo == null ? "" : String(row.oldNo);
+                            tr.appendChild(oldNo);
+
+                            const newNo = document.createElement("td");
+                            newNo.className = "gutter new";
+                            newNo.textContent = row.newNo == null ? "" : String(row.newNo);
+                            tr.appendChild(newNo);
+
+                            const content = document.createElement("td");
+                            content.className = "content";
+                            content.textContent = row.text;
+                            tr.appendChild(content);
+
+                            tbody.appendChild(tr);
+                        }
+                    }
+
+                    hunksWrap.appendChild(table);
+                    body.appendChild(hunksWrap);
+                }
+
+                section.appendChild(body);
+
+                toggle.addEventListener("click", () => {
+                    const collapsed = section.classList.toggle("collapsed");
+                    toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+                });
+
+                return section;
+            }
+
+            function render(payload) {
+                const patch = (payload && payload.diff) || "";
+                const r = root();
+                r.innerHTML = "";
+
+                if (!patch.trim()) {
+                    const div = document.createElement("div");
+                    div.className = "message";
+                    div.textContent = "No diff.";
+                    r.appendChild(div);
+                    document.body.dataset.ready = "true";
+                    return;
+                }
+
+                let files;
+                try {
+                    files = parseUnifiedDiff(patch);
+                } catch (error) {
+                    setMessage(`Failed to parse diff: ${error?.message || String(error)}`);
+                    return;
+                }
+
+                if (files.length === 0) {
+                    setMessage("No files found in diff.");
+                    return;
+                }
+
+                files.forEach((file, index) => {
+                    r.appendChild(renderFile(file, index));
+                });
+
+                document.body.dataset.ready = "true";
+            }
+
+            // Public bridge functions consumed by the native side.
+            window.orchardRenderDiff = function (payload) {
+                try {
+                    render(payload);
+                } catch (error) {
+                    setMessage(`Failed to render diff: ${error?.message || String(error)}`);
+                }
+            };
+
+            window.orchardShowError = function (payload) {
+                setMessage(payload && payload.message ? payload.message : "Unable to render diff.");
+            };
+
+            // Auto-copy any selection inside the diff to the system clipboard
+            // via the native bridge — saves a Cmd+C before pasting into a
+            // terminal. Fires after the gesture ends (mouseup/keyup) so we
+            // copy the final selection rather than every intermediate one.
+            let lastCopied = "";
+            function copySelection() {
+                const sel = window.getSelection();
+                if (!sel || sel.isCollapsed) return;
+                const text = sel.toString();
+                if (!text || text === lastCopied) return;
+                lastCopied = text;
+                try {
+                    window.webkit.messageHandlers.orchardCopy.postMessage(text);
+                } catch (_) { /* bridge unavailable — non-fatal */ }
+            }
+            document.addEventListener("mouseup", copySelection);
+            document.addEventListener("keyup", (event) => {
+                if (event.shiftKey || event.key === "Shift" || event.metaKey) copySelection();
+            });
+        })();
+    </script>
+</body>
+</html>

@@ -154,6 +154,17 @@ enum AppCommand: String, CaseIterable, Identifiable {
         }
     }
 
+    /// Built-in extra bindings that always work alongside the primary
+    /// shortcut (browser-style Cmd+Shift+[ / ] tab switching). Not shown or
+    /// rebindable in Settings → Keymaps.
+    var secondaryShortcuts: [String] {
+        switch self {
+        case .nextTab: ["cmd+shift+]"]
+        case .previousTab: ["cmd+shift+["]
+        default: []
+        }
+    }
+
     /// `UserDefaults` key for the user's override of the default shortcut.
     /// Stable: derived from the raw value, which never changes.
     var defaultsKey: String { "orchard.hotkey.\(rawValue)" }

@@ -105,7 +105,7 @@ struct MainWindow: View {
                         Text("Changes")
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(.primary)
-                            .padding(.horizontal, 8)
+                            .padding(.horizontal, 16)
                         Button {
                             diffModel.load(project: project, revision: diffState.revision)
                         } label: {

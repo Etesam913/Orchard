@@ -147,7 +147,11 @@ enum HotkeyRegistry {
     }
 
     static func matches(_ event: NSEvent, command: AppCommand) -> Bool {
-        guard let shortcut = selectedShortcut(for: command), shortcut.id != "none" else { return false }
-        return shortcut.matches(event)
+        if let shortcut = selectedShortcut(for: command), shortcut.id != "none", shortcut.matches(event) {
+            return true
+        }
+        return command.secondaryShortcuts
+            .compactMap(parseShortcut)
+            .contains { $0.matches(event) }
     }
 }

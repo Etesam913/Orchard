@@ -153,6 +153,9 @@ struct CommandSource: PaletteSource {
             action = { QuickTerminalService.shared.toggle() }
         case .refreshDiff:
             action = { NotificationCenter.default.post(name: .refreshDiff, object: nil) }
+        case .focusDiffSearch:
+            guard projectID != nil else { return nil }
+            action = { NotificationCenter.default.post(name: .focusDiffSearch, object: nil) }
         }
 
         guard let action else { return nil }

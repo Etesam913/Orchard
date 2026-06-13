@@ -246,6 +246,16 @@ final class MainAppResponder: KeyResponder {
             return .handled
         }
 
+        if HotkeyRegistry.matches(event, command: .focusDiffSearch) {
+            guard appState.activeProjectID != nil else { return .passThrough }
+            // A terminal surface owns Cmd+F (Ghostty has its own find), so let
+            // the event pass through when the focus is in a terminal pane.
+            let responder = (event.window ?? mainWindow)?.firstResponder
+            if responder is GhosttyTerminalNSView { return .passThrough }
+            NotificationCenter.default.post(name: .focusDiffSearch, object: nil)
+            return .handled
+        }
+
         // Cmd+1-9 tab selection. Must check after the configurable hotkeys
         // so user bindings take precedence over digits.
         if flags == .command {

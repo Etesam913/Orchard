@@ -40,6 +40,18 @@ final class GhosttyCallbacks: @unchecked Sendable {
             let pwd = String(cString: ptr)
             DispatchQueue.main.async { view.currentPwd = pwd }
             return true
+        case GHOSTTY_ACTION_PROGRESS_REPORT:
+            guard let view = surfaceView(from: target) else { return true }
+            let state = action.action.progress_report.state
+            let isRunning =
+                state == GHOSTTY_PROGRESS_STATE_SET ||
+                state == GHOSTTY_PROGRESS_STATE_INDETERMINATE
+            DispatchQueue.main.async { view.onProgressActivityChange?(isRunning) }
+            return true
+        case GHOSTTY_ACTION_COMMAND_FINISHED:
+            guard let view = surfaceView(from: target) else { return true }
+            DispatchQueue.main.async { view.onCommandFinished?() }
+            return true
         case GHOSTTY_ACTION_DESKTOP_NOTIFICATION:
             return true
         case GHOSTTY_ACTION_COLOR_CHANGE:

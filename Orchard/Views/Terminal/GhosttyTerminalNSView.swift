@@ -23,6 +23,9 @@ final class GhosttyTerminalNSView: NSView {
     var onSearchEnd: (() -> Void)?
     var onSearchTotal: ((Int?) -> Void)?
     var onSearchSelected: ((Int?) -> Void)?
+    var onCommandSubmitted: ((String) -> Void)?
+    var onCommandFinished: (() -> Void)?
+    var onProgressActivityChange: ((Bool) -> Void)?
     var isFocused: Bool = false
     var currentPwd: String?
 
@@ -30,11 +33,13 @@ final class GhosttyTerminalNSView: NSView {
     private var _selectedRange: NSRange = .init(location: NSNotFound, length: 0)
     private var keyTextAccumulator: [String] = []
     private var currentKeyEvent: NSEvent?
+    private var commandLineBuffer = ""
 
     init(workingDirectory: String) {
         self.workingDirectory = workingDirectory
         super.init(frame: .zero)
         wantsLayer = true
+        registerForDraggedTypes([.fileURL])
         setupTrackingArea()
         Self.liveViews.add(self)
     }
@@ -209,8 +214,14 @@ final class GhosttyTerminalNSView: NSView {
         if flags == .command, Self.systemKeys.contains(key) { return true }
         // Cmd+1-9 for tab selection
         if flags == .command, let n = Int(key), (1 ... 9).contains(n) { return true }
-        // Check all configurable hotkey actions
-        if AppCommand.allCases.contains(where: { HotkeyRegistry.matches(event, command: $0) }) { return true }
+        // Check all configurable hotkey actions. `focusDiffSearch` (Cmd+F) is
+        // deliberately excluded: a focused terminal owns Cmd+F for its own
+        // search, so we forward it to Ghostty instead of swallowing it as an
+        // app shortcut. (The KeyRouter only routes Cmd+F to the diff search
+        // when a terminal pane isn't first responder.)
+        if AppCommand.allCases.contains(where: {
+            $0 != .focusDiffSearch && HotkeyRegistry.matches(event, command: $0)
+        }) { return true }
         return false
     }
 
@@ -276,6 +287,9 @@ final class GhosttyTerminalNSView: NSView {
         }
         let action: ghostty_input_action_e = event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if !event.isARepeat {
+            trackCommandInput(event)
+        }
 
         if flags.contains(.control), !flags.contains(.command), !flags.contains(.option), !hasMarkedText() {
             if isAppShortcut(event) { return }
@@ -453,6 +467,59 @@ final class GhosttyTerminalNSView: NSView {
         ghostty_surface_mouse_scroll(surface, event.scrollingDeltaX, event.scrollingDeltaY, scrollMods)
     }
 
+    // MARK: - File drops
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        dragOperation(for: sender)
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        dragOperation(for: sender)
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        !draggedFileURLs(from: sender).isEmpty
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let urls = draggedFileURLs(from: sender)
+        guard !urls.isEmpty else { return false }
+
+        window?.makeFirstResponder(self)
+        if let surface {
+            ghostty_surface_set_focus(surface, true)
+            onFocus?()
+        }
+
+        insertText(
+            droppedFileText(for: urls),
+            replacementRange: NSRange(location: NSNotFound, length: 0)
+        )
+        return true
+    }
+
+    private func dragOperation(for sender: NSDraggingInfo) -> NSDragOperation {
+        draggedFileURLs(from: sender).isEmpty ? [] : .copy
+    }
+
+    private func draggedFileURLs(from sender: NSDraggingInfo) -> [URL] {
+        let options: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
+        return sender.draggingPasteboard
+            .readObjects(forClasses: [NSURL.self], options: options)?
+            .compactMap { item in
+                guard let url = item as? URL, url.isFileURL else { return nil }
+                return url
+            } ?? []
+    }
+
+    private func droppedFileText(for urls: [URL]) -> String {
+        urls.map { shellEscapedPath($0.path) }.joined(separator: " ") + " "
+    }
+
+    private func shellEscapedPath(_ path: String) -> String {
+        "'\(path.split(separator: "'", omittingEmptySubsequences: false).joined(separator: "'\\''"))'"
+    }
+
     // MARK: - Context menu
 
     private func presentContextMenu(with event: NSEvent) {
@@ -598,6 +665,37 @@ final class GhosttyTerminalNSView: NSView {
         return text
     }
 
+    private func trackCommandInput(_ event: NSEvent) {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if flags.contains(.command) || flags.contains(.option) { return }
+        if flags.contains(.control) {
+            let key = (event.charactersIgnoringModifiers ?? "").lowercased()
+            if key == "c" || key == "d" { commandLineBuffer = "" }
+            return
+        }
+
+        switch event.keyCode {
+        case 36, 76:
+            let command = commandLineBuffer
+            commandLineBuffer = ""
+            onCommandSubmitted?(command)
+        case 51:
+            if !commandLineBuffer.isEmpty { commandLineBuffer.removeLast() }
+        default:
+            let text = filterSpecial(event.characters ?? "")
+            if text.contains("\n") || text.contains("\r") {
+                let parts = text.components(separatedBy: .newlines)
+                if let first = parts.first {
+                    commandLineBuffer += first
+                    onCommandSubmitted?(commandLineBuffer)
+                }
+                commandLineBuffer = parts.last ?? ""
+            } else {
+                commandLineBuffer += text
+            }
+        }
+    }
+
     /// Builds a synthetic NSEvent whose modifier flags reflect libghostty's
     /// translation policy — with macos-option-as-alt on, Option is stripped so
     /// `characters(byApplyingModifiers:)` returns the unshifted char ("b")
@@ -656,6 +754,16 @@ extension GhosttyTerminalNSView: @preconcurrency NSTextInputClient {
         if currentKeyEvent != nil {
             keyTextAccumulator.append(text)
         } else if let surface {
+            if text.contains("\n") || text.contains("\r") {
+                let parts = text.components(separatedBy: .newlines)
+                if let first = parts.first {
+                    commandLineBuffer += first
+                    onCommandSubmitted?(commandLineBuffer)
+                }
+                commandLineBuffer = parts.last ?? ""
+            } else {
+                commandLineBuffer += text
+            }
             text.withCString { ptr in
                 var ke = ghostty_input_key_s()
                 ke.action = GHOSTTY_ACTION_PRESS

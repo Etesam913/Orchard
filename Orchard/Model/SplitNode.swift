@@ -10,6 +10,8 @@ final class Pane: Identifiable {
     let id = UUID()
     let projectPath: String
     var title: String = "Terminal"
+    var assistantProcessName: String?
+    var isAssistantQueryRunning = false
     let searchState = TerminalSearchState()
 
     /// The live terminal NSView for this pane. Created lazily the first time
@@ -42,6 +44,9 @@ final class Pane: Identifiable {
         view.onSearchEnd = nil
         view.onSearchTotal = nil
         view.onSearchSelected = nil
+        view.onCommandSubmitted = nil
+        view.onCommandFinished = nil
+        view.onProgressActivityChange = nil
         view.onFocus = nil
         view.onSplitRequest = nil
         view.destroySurface()
@@ -71,17 +76,14 @@ final class Pane: Identifiable {
     }()
 
     var sidebarSegmentTitle: String {
-        processTitle
+        if let assistantProcessName { return assistantProcessName }
+        return processTitle
     }
 
-    var isAssistantQueryRunning: Bool {
-        Self.assistantProcessNames.contains(processTitle.lowercased())
+    func didSubmitCommand(_ command: String) {
+        guard let assistant = Self.assistantProcessName(from: command) else { return }
+        assistantProcessName = assistant
     }
-
-    private static let assistantProcessNames: Set<String> = [
-        "claude",
-        "codex"
-    ]
 
     private static func isPathLike(_ token: String) -> Bool {
         token.contains("/") || token.hasPrefix("~")
@@ -89,6 +91,39 @@ final class Pane: Identifiable {
 
     private static func isNoise(_ token: String) -> Bool {
         token.allSatisfy { !$0.isLetter && !$0.isNumber }
+    }
+
+    private static func assistantProcessName(from command: String) -> String? {
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        var tokens = trimmed.split(whereSeparator: \.isWhitespace).map(String.init)
+        while let first = tokens.first {
+            let executable = (first as NSString).lastPathComponent.lowercased()
+            if first.contains("="), !first.hasPrefix("=") {
+                tokens.removeFirst()
+                continue
+            }
+            if executable == "env" || executable == "sudo" || executable == "command" {
+                tokens.removeFirst()
+                continue
+            }
+            if ["npx", "bunx", "pnpm", "yarn"].contains(executable), tokens.count > 1 {
+                tokens.removeFirst()
+                if tokens.first == "dlx" || tokens.first == "exec" {
+                    tokens.removeFirst()
+                }
+                while tokens.first?.hasPrefix("-") == true {
+                    tokens.removeFirst()
+                }
+                continue
+            }
+            break
+        }
+        guard let first = tokens.first else { return nil }
+        let executable = (first as NSString).lastPathComponent.lowercased()
+        if executable == "claude" || executable.hasPrefix("claude-") { return "claude" }
+        if executable == "codex" || executable.hasPrefix("codex-") || executable.hasSuffix("/codex") { return "codex" }
+        return nil
     }
 
     init(projectPath: String) {

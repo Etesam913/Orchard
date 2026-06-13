@@ -43,6 +43,7 @@ enum AppCommand: String, CaseIterable, Identifiable {
     case reloadGhosttyConfig = "reload_ghostty_config"
     case toggleQuickTerminal = "toggle_quick_terminal"
     case refreshDiff = "refresh_diff"
+    case focusDiffSearch = "focus_diff_search"
 
     var id: String { rawValue }
 
@@ -78,6 +79,7 @@ enum AppCommand: String, CaseIterable, Identifiable {
         case .reloadGhosttyConfig: "Reload Ghostty config"
         case .toggleQuickTerminal: "Toggle quick terminal"
         case .refreshDiff: "Refresh diff"
+        case .focusDiffSearch: "Search diff"
         }
     }
 
@@ -112,7 +114,8 @@ enum AppCommand: String, CaseIterable, Identifiable {
              .toggleCommandPalette,
              .reloadGhosttyConfig,
              .toggleQuickTerminal,
-             .refreshDiff: .window
+             .refreshDiff,
+             .focusDiffSearch: .window
         }
     }
 
@@ -151,6 +154,7 @@ enum AppCommand: String, CaseIterable, Identifiable {
         case .reloadGhosttyConfig: "cmd+shift+,"
         case .toggleQuickTerminal: "ctrl+`"
         case .refreshDiff: "cmd+r"
+        case .focusDiffSearch: "cmd+f"
         }
     }
 

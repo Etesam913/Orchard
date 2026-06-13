@@ -134,5 +134,15 @@ private struct TerminalSurface: NSViewRepresentable {
         }
         view.onSearchTotal = { [weak pane] total in pane?.searchState.total = total }
         view.onSearchSelected = { [weak pane] sel in pane?.searchState.selected = sel }
+        view.onCommandSubmitted = { [weak pane] command in
+            pane?.didSubmitCommand(command)
+        }
+        view.onCommandFinished = { [weak pane] in
+            pane?.isAssistantQueryRunning = false
+            pane?.assistantProcessName = nil
+        }
+        view.onProgressActivityChange = { [weak pane] isRunning in
+            pane?.isAssistantQueryRunning = isRunning
+        }
     }
 }

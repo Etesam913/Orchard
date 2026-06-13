@@ -3,17 +3,10 @@ import SwiftUI
 struct DiffSidebar: View {
     let projectPath: String
     let state: ProjectDiff
-
-    @Environment(\.colorScheme) private var colorScheme
-
-    // Slightly lighter than the background in dark mode, slightly darker in
-    // light mode, so the diff view reads as a distinct panel next to the
-    // terminal.
-    private var borderColor: Color {
-        colorScheme == .dark
-            ? Color.white.opacity(0.12)
-            : Color.black.opacity(0.12)
-    }
+    var searchQuery: String = ""
+    var searchToken: Int = 0
+    var searchNextToken: Int = 0
+    var onSearchResult: ((Int, Int) -> Void)? = nil
 
     var body: some View {
         // Anchor side-effects on a stable container. Modifiers on `Group`
@@ -24,21 +17,27 @@ struct DiffSidebar: View {
             content
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .overlay(alignment: .leading) {
-            Rectangle()
-                .fill(borderColor)
-                .frame(width: 1)
-        }
     }
 
     @ViewBuilder
     private var content: some View {
-        if state.diff.isEmpty, !state.isLoading {
+        if state.isLoading {
+            ProgressView()
+                .controlSize(.regular)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if state.diff.isEmpty {
             ContentUnavailableView("No Diff", systemImage: "doc.text.magnifyingglass")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            PierreDiffView(diff: state.diff, projectPath: projectPath)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            PierreDiffView(
+                diff: state.diff,
+                projectPath: projectPath,
+                searchQuery: searchQuery,
+                searchToken: searchToken,
+                searchNextToken: searchNextToken,
+                onSearchResult: onSearchResult
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 }

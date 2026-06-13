@@ -12,16 +12,46 @@ struct MainWindow: View {
     private var diffModel = ProjectDiffModel()
     @State
     private var isDiffSidebarVisible = true
+    @State
+    private var isDiffSearchVisible = false
+    @State
+    private var diffSearchQuery = ""
+    // Bumped (debounced) as the user types to re-run the highlight pass.
+    @State
+    private var diffSearchToken = 0
+    // Bumped on every Enter to jump to the next match.
+    @State
+    private var diffSearchNextToken = 0
+    // Pending debounce for the live search-as-you-type.
+    @State
+    private var diffSearchDebounce: Task<Void, Never>?
+    // Search is per-project: stash each project's field visibility + query so
+    // switching away clears the bar and switching back restores it.
+    @State
+    private var diffSearchStates: [Project.ID: DiffSearchState] = [:]
+    // Match count and current (1-based) match reported back by the WebView.
+    @State
+    private var diffSearchMatchCount = 0
+    @State
+    private var diffSearchMatchIndex = 0
+    // Bumped to (re)focus the search field — e.g. when Cmd+F is pressed while
+    // the field is already on screen, where `onAppear` won't fire again.
+    @State
+    private var diffSearchFocusTrigger = 0
     // Survives toggle. HSplitView discards the divider position when the
     // sidebar view is removed and re-added, so without this the bar snaps
     // back to its `idealWidth` every time the user hides/shows it.
     @AppStorage("orchard.diffSidebar.width")
-    private var diffSidebarWidth: Double = 480
+    private var diffSidebarWidth: Double = 425
     // Same story for the project (left) sidebar: NavigationSplitView resets
     // the column to its `idealWidth` whenever columnVisibility flips back
     // from .detailOnly to .automatic.
     @AppStorage("orchard.projectSidebar.width")
     private var projectSidebarWidth: Double = 180
+
+    // Shared so the toolbar search field matches the diff panel's minimum
+    // width exactly.
+    private let diffSidebarMinWidth: CGFloat = 480
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -70,9 +100,16 @@ struct MainWindow: View {
                 if isDiffSidebarVisible {
                     DiffSidebar(
                         projectPath: project?.path ?? "",
-                        state: diffState
+                        state: diffState,
+                        searchQuery: diffSearchQuery,
+                        searchToken: diffSearchToken,
+                        searchNextToken: diffSearchNextToken,
+                        onSearchResult: { count, index in
+                            diffSearchMatchCount = count
+                            diffSearchMatchIndex = index
+                        }
                     )
-                    .frame(minWidth: 280, idealWidth: diffSidebarWidth, maxWidth: 1200)
+                    .frame(minWidth: diffSidebarMinWidth, idealWidth: diffSidebarWidth, maxWidth: 1200)
                     .background(
                         GeometryReader { proxy in
                             Color.clear.preference(
@@ -101,22 +138,37 @@ struct MainWindow: View {
             .navigationSubtitle(activeTabTitle)
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
-                    if isDiffSidebarVisible {
-                        Text("Changes")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(.primary)
-                            .padding(.horizontal, 16)
-                        Button {
-                            diffModel.load(project: project, revision: diffState.revision)
-                        } label: {
-                            if diffState.isLoading {
-                                ProgressView().controlSize(.small)
-                            } else {
+                    if isDiffSidebarVisible, !diffState.isLoading {
+                        if isDiffSearchVisible {
+                            DiffSearchField(
+                                query: $diffSearchQuery,
+                                matchCount: diffSearchMatchCount,
+                                matchIndex: diffSearchMatchIndex,
+                                // Track the diff panel's live width so the two
+                                // line up no matter how the divider is dragged.
+                                width: CGFloat(diffSidebarWidth),
+                                focusTrigger: diffSearchFocusTrigger,
+                                onSubmit: { diffSearchNextToken += 1 },
+                                onClose: { closeDiffSearch() }
+                            )
+                        } else {
+                            DiffStatsToolbarLabel(stats: diffState.stats)
+                            Button {
+                                diffModel.load(project: project, revision: diffState.revision)
+                            } label: {
                                 Image(systemName: "arrow.clockwise")
                             }
+                            .disabled(project == nil)
+                            .help("Refresh diff")
+                            Button {
+                                isDiffSearchVisible = true
+                                diffSearchFocusTrigger += 1
+                            } label: {
+                                Image(systemName: "magnifyingglass")
+                            }
+                            .disabled(project == nil)
+                            .help("Search diff")
                         }
-                        .disabled(project == nil || diffState.isLoading)
-                        .help("Refresh diff")
                     }
                     Button {
                         isDiffSidebarVisible.toggle()
@@ -152,6 +204,43 @@ struct MainWindow: View {
         .onReceive(NotificationCenter.default.publisher(for: .toggleDiffSidebar)) { _ in
             isDiffSidebarVisible.toggle()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .focusDiffSearch)) { _ in
+            // Cmd+F: reveal the diff sidebar and the search field if needed,
+            // then focus it. If it's already open, just re-focus.
+            if !isDiffSidebarVisible { isDiffSidebarVisible = true }
+            isDiffSearchVisible = true
+            diffSearchFocusTrigger += 1
+        }
+        .onChange(of: diffSearchQuery) {
+            // Search-as-you-type: re-run the highlight pass (and refresh the
+            // match count) 200ms after the last keystroke.
+            diffSearchDebounce?.cancel()
+            diffSearchDebounce = Task {
+                try? await Task.sleep(for: .milliseconds(200))
+                guard !Task.isCancelled else { return }
+                diffSearchToken += 1
+            }
+        }
+        .onChange(of: activeProject?.id) { oldID, newID in
+            // Stash the outgoing project's search state, then restore the
+            // incoming one (or start blank for a project not searched yet).
+            diffSearchDebounce?.cancel()
+            if let oldID {
+                diffSearchStates[oldID] = DiffSearchState(
+                    isVisible: isDiffSearchVisible,
+                    query: diffSearchQuery
+                )
+            }
+            let restored = newID.flatMap { diffSearchStates[$0] } ?? DiffSearchState()
+            isDiffSearchVisible = restored.isVisible
+            diffSearchQuery = restored.query
+            diffSearchMatchCount = 0
+            diffSearchMatchIndex = 0
+            // Apply (or clear) the restored query against the new diff. The
+            // WebView also re-applies after its render completes, covering the
+            // async diff load.
+            diffSearchToken += 1
+        }
         .onChange(of: appState.isCommandPaletteVisible) { _, visible in
             guard !visible else { return }
             // Run a post-dismiss action if one was registered, otherwise return
@@ -163,6 +252,16 @@ struct MainWindow: View {
                 DispatchQueue.main.async { appState.restoreFocusToActivePane() }
             }
         }
+    }
+
+    private func closeDiffSearch() {
+        diffSearchDebounce?.cancel()
+        isDiffSearchVisible = false
+        diffSearchQuery = ""
+        diffSearchMatchCount = 0
+        diffSearchMatchIndex = 0
+        // Bump the token with an empty query so the WebView clears highlights.
+        diffSearchToken += 1
     }
 
     private var activeProject: Project? {
@@ -442,6 +541,146 @@ private struct DiffSidebarWidthKey: PreferenceKey {
     static let defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
+    }
+}
+
+/// Per-project snapshot of the diff search field, swapped in/out on project
+/// switch so each project keeps its own search.
+private struct DiffSearchState {
+    var isVisible = false
+    var query = ""
+}
+
+/// Toolbar search box that replaces the diff stats/refresh controls while
+/// active. Enter scrolls the diff to the next match; Escape or the ✕ closes it.
+private struct DiffSearchField: View {
+    @Binding var query: String
+    let matchCount: Int
+    let matchIndex: Int
+    let width: CGFloat
+    let focusTrigger: Int
+    let onSubmit: () -> Void
+    let onClose: () -> Void
+
+    private var countLabel: String? {
+        guard !query.isEmpty else { return nil }
+        return matchCount == 0 ? "No results" : "\(matchIndex)/\(matchCount)"
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+                .font(.system(size: 12))
+            // AppKit-backed: a SwiftUI TextField in an NSToolbar can't reliably
+            // steal first-responder from the WebView, so focus silently fails.
+            // This wrapper calls makeFirstResponder directly.
+            FocusableSearchField(
+                text: $query,
+                focusTrigger: focusTrigger,
+                onSubmit: onSubmit,
+                onCancel: onClose
+            )
+            .frame(maxWidth: .infinity)
+            if let countLabel {
+                Text(countLabel)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+            Button(action: onClose) {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Close search")
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .frame(width: width)
+    }
+}
+
+/// A borderless NSTextField that can be programmatically focused. `focusTrigger`
+/// is a monotonic counter; whenever it changes the field grabs first responder,
+/// which is the only reliable way to focus a control living inside an NSToolbar.
+private struct FocusableSearchField: NSViewRepresentable {
+    @Binding var text: String
+    var focusTrigger: Int
+    var onSubmit: () -> Void
+    var onCancel: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField()
+        field.isBordered = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.font = .systemFont(ofSize: 13)
+        field.placeholderString = "Search diff"
+        field.delegate = context.coordinator
+        field.lineBreakMode = .byTruncatingTail
+        field.usesSingleLineMode = true
+        field.cell?.isScrollable = true
+        field.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return field
+    }
+
+    func updateNSView(_ field: NSTextField, context: Context) {
+        context.coordinator.parent = self
+        if field.stringValue != text { field.stringValue = text }
+        guard context.coordinator.lastFocusTrigger != focusTrigger else { return }
+        context.coordinator.lastFocusTrigger = focusTrigger
+        // Defer: on first appearance the field isn't in a window yet.
+        DispatchQueue.main.async {
+            guard let window = field.window else { return }
+            window.makeFirstResponder(field)
+        }
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: FocusableSearchField
+        // Start at Int.min so the first real trigger value always differs and
+        // focuses on initial appearance.
+        var lastFocusTrigger = Int.min
+
+        init(_ parent: FocusableSearchField) { self.parent = parent }
+
+        func controlTextDidChange(_ obj: Notification) {
+            guard let field = obj.object as? NSTextField else { return }
+            parent.text = field.stringValue
+        }
+
+        func control(_: NSControl, textView _: NSTextView, doCommandBy selector: Selector) -> Bool {
+            switch selector {
+            case #selector(NSResponder.insertNewline(_:)):
+                parent.onSubmit()
+                return true
+            case #selector(NSResponder.cancelOperation(_:)):
+                parent.onCancel()
+                return true
+            default:
+                return false
+            }
+        }
+    }
+}
+
+private struct DiffStatsToolbarLabel: View {
+    let stats: ProjectDiffStats
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("+\(stats.additions)")
+                .foregroundStyle(Color(nsColor: .systemGreen))
+            Text("-\(stats.deletions)")
+                .foregroundStyle(Color(nsColor: .systemRed))
+        }
+        .font(.system(size: 13, weight: .semibold, design: .monospaced))
+        .padding(.horizontal, 12)
+        .accessibilityLabel("\(stats.additions) additions, \(stats.deletions) deletions")
     }
 }
 

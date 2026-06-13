@@ -5,9 +5,15 @@ struct ProjectDiff: Equatable {
     var projectPath: String = ""
     var revision: String = "@"
     var summary: String = ""
+    var stats = ProjectDiffStats()
     var diff: String = ""
     var errorMessage: String?
     var isLoading = false
+}
+
+struct ProjectDiffStats: Equatable, Sendable {
+    var additions = 0
+    var deletions = 0
 }
 
 @MainActor @Observable
@@ -32,6 +38,7 @@ final class ProjectDiffModel {
             await MainActor.run {
                 guard self.state.projectID == project.id, self.state.revision == requestedRevision else { return }
                 self.state.summary = result.summary
+                self.state.stats = result.stats
                 self.state.diff = result.diff
                 self.state.errorMessage = result.errorMessage
                 self.state.isLoading = false
@@ -47,7 +54,7 @@ final class ProjectDiffModel {
     /// Re-fetch the current project/revision diff without toggling
     /// `isLoading`. Used by the sidebar's polling loop so file edits surface
     /// without flashing the spinner; only mutates state when the diff or
-    /// summary actually changed, so the WKWebView only re-renders on real
+    /// summary actually changed, so the diff view only re-parses on real
     /// changes.
     func refresh() async {
         guard let projectID = state.projectID, !state.projectPath.isEmpty else { return }
@@ -55,8 +62,9 @@ final class ProjectDiffModel {
         let revision = state.revision
         let result = await ProjectDiffService.loadDiff(path: path, revision: revision)
         guard state.projectID == projectID, state.revision == revision else { return }
-        if state.diff != result.diff || state.summary != result.summary || state.errorMessage != result.errorMessage {
+        if state.diff != result.diff || state.summary != result.summary || state.stats != result.stats || state.errorMessage != result.errorMessage {
             state.summary = result.summary
+            state.stats = result.stats
             state.diff = result.diff
             state.errorMessage = result.errorMessage
         }
@@ -66,6 +74,7 @@ final class ProjectDiffModel {
 enum ProjectDiffService {
     struct Result {
         var summary: String
+        var stats: ProjectDiffStats
         var diff: String
         var errorMessage: String?
     }
@@ -81,6 +90,7 @@ enum ProjectDiffService {
                 summary: [root.isEmpty ? nil : "jj workspace: \(root)", change.isEmpty ? nil : change]
                     .compactMap(\.self)
                     .joined(separator: "\n"),
+                stats: summarize(diff: jjDiff.output),
                 diff: jjDiff.output,
                 errorMessage: nil
             )
@@ -115,6 +125,7 @@ enum ProjectDiffService {
             }
             return Result(
                 summary: gitSummary.output.trimmingCharacters(in: .whitespacesAndNewlines),
+                stats: summarize(diff: combined),
                 diff: combined,
                 errorMessage: "jj diff unavailable for \(revision); showing Git working tree diff."
             )
@@ -122,9 +133,25 @@ enum ProjectDiffService {
 
         return Result(
             summary: "",
+            stats: ProjectDiffStats(),
             diff: "",
             errorMessage: jjDiff.output.isEmpty ? gitDiff.output : jjDiff.output
         )
+    }
+
+    private static func summarize(diff: String) -> ProjectDiffStats {
+        var stats = ProjectDiffStats()
+        for line in diff.split(separator: "\n", omittingEmptySubsequences: false) {
+            if line.hasPrefix("+++") || line.hasPrefix("---") {
+                continue
+            }
+            if line.hasPrefix("+") {
+                stats.additions += 1
+            } else if line.hasPrefix("-") {
+                stats.deletions += 1
+            }
+        }
+        return stats
     }
 
     private static func run(_ executable: String, arguments: [String], currentDirectory: String) async -> (exitCode: Int32, output: String) {
@@ -167,7 +194,7 @@ enum ProjectDiffService {
     }
 }
 
-private final class OutputCollector: @unchecked Sendable {
+private nonisolated final class OutputCollector: @unchecked Sendable {
     private let lock = NSLock()
     private var data = Data()
 

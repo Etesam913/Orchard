@@ -7,4 +7,5 @@ extension Notification.Name {
     static let autoTilingEnabledDidChange = Notification.Name("OrchardAutoTilingEnabledDidChange")
     static let refreshDiff = Notification.Name("OrchardRefreshDiff")
     static let toggleDiffSidebar = Notification.Name("OrchardToggleDiffSidebar")
+    static let focusDiffSearch = Notification.Name("OrchardFocusDiffSearch")
 }

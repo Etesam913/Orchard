@@ -36,7 +36,7 @@ final class GhosttyApp {
             logger.error("ghostty_init failed")
             return
         }
-        let (cfgOpt, _) = loadConfig()
+        let (cfgOpt, _) = GhosttyConfigLoader.load()
         guard let cfg = cfgOpt else {
             logger.error("ghostty_config_new failed")
             return
@@ -158,7 +158,7 @@ final class GhosttyApp {
     @discardableResult
     func reloadConfig() -> ReloadResult {
         guard let app else { return ReloadResult(diagnostics: []) }
-        let (newConfig, result) = loadConfig()
+        let (newConfig, result) = GhosttyConfigLoader.load()
         guard let newConfig else { return result }
         ghostty_app_update_config(app, newConfig)
         // Also update each existing surface so changes take effect immediately
@@ -242,50 +242,6 @@ final class GhosttyApp {
         var color = ghostty_config_color_s()
         guard ghostty_config_get(config, &color, key, UInt(key.utf8.count)) else { return nil }
         return NSColor(srgbRed: CGFloat(color.r) / 255, green: CGFloat(color.g) / 255, blue: CGFloat(color.b) / 255, alpha: 1)
-    }
-
-    private func loadConfig() -> (ghostty_config_t?, ReloadResult) {
-        var result = ReloadResult(diagnostics: [])
-        guard let cfg = ghostty_config_new() else { return (nil, result) }
-
-        // Three-layer ghostty config:
-        //   1. Orchard defaults — tasteful first-launch values.
-        //   2. User's Ghostty config — overrides any default. Source of truth
-        //      for all ghostty-shaped settings (theme, font, palette, keybinds,
-        //      shell integration, etc.).
-        //   3. Orchard overrides — keys Orchard absolutely needs to control,
-        //      currently just background-opacity/blur for the window-level
-        //      translucency contract. Loaded last so it overrides the user.
-        // libghostty merges last-wins, so this ordering produces:
-        //   Orchard defaults < user's Ghostty config < Orchard overrides
-        OrchardConfig.shared.defaultsPath.withCString { ghostty_config_load_file(cfg, $0) }
-        let userPath = Preferences.shared.expandedUserGhosttyConfigPath
-        if !userPath.isEmpty {
-            if FileManager.default.fileExists(atPath: userPath) {
-                userPath.withCString { ghostty_config_load_file(cfg, $0) }
-            } else {
-                logger.info("user Ghostty config not found at \(userPath, privacy: .public); skipping")
-                result.missingUserConfigPath = userPath
-            }
-        }
-        OrchardConfig.shared.overridesPath.withCString { ghostty_config_load_file(cfg, $0) }
-        ghostty_config_load_recursive_files(cfg)
-        ghostty_config_finalize(cfg)
-
-        // Collect ghostty's diagnostics (parse errors, unknown keys, bad
-        // values). Log them and surface to the caller so the Settings reload
-        // button can show them in an alert.
-        let diagCount = ghostty_config_diagnostics_count(cfg)
-        for i in 0 ..< diagCount {
-            let diag = ghostty_config_get_diagnostic(cfg, i)
-            if let msg = diag.message {
-                let s = String(cString: msg)
-                logger.warning("config: \(s, privacy: .public)")
-                result.diagnostics.append(s)
-            }
-        }
-
-        return (cfg, result)
     }
 
     private static let resourcePaths = [

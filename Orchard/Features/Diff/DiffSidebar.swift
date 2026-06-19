@@ -3,6 +3,7 @@ import SwiftUI
 struct DiffSidebar: View {
     let projectPath: String
     let state: ProjectDiff
+    var splitView: Bool = false
     var searchQuery: String = ""
     var searchToken: Int = 0
     var searchNextToken: Int = 0
@@ -32,6 +33,7 @@ struct DiffSidebar: View {
             PierreDiffView(
                 diff: state.diff,
                 projectPath: projectPath,
+                splitView: splitView,
                 searchQuery: searchQuery,
                 searchToken: searchToken,
                 searchNextToken: searchNextToken,

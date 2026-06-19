@@ -1,99 +1,5 @@
 import AppKit
 
-// The main `handleKeyEvent` used to be a 140-line cascade of if-statements in
-// OrchardApp.swift. These responders own focused slices of that logic and get
-// ordered by the KeyRouter so disposition is explicit instead of implicit.
-
-/// Toggles the unified command palette on Cmd+P / Cmd+Shift+P. When the
-/// palette is visible, passes other keys through to SwiftUI's own key
-/// handlers (arrow navigation, escape, etc.).
-@MainActor
-final class PaletteResponder: KeyResponder {
-    private let appState: AppState
-
-    init(appState: AppState) {
-        self.appState = appState
-    }
-
-    func handle(_ event: NSEvent) -> KeyDisposition {
-        if HotkeyRegistry.matches(event, command: .toggleCommandPalette) {
-            appState.isCommandPaletteVisible.toggle()
-            return .handled
-        }
-        // While the palette is visible, SwiftUI owns arrow / escape / etc.
-        return .passThrough
-    }
-}
-
-/// Handles all hotkeys while the quick terminal is visible. Registered before
-/// the main-app responder so split/close/focus route to the quick terminal
-/// instead of the main window when the panel is up.
-@MainActor
-final class QuickTerminalResponder: KeyResponder {
-    private static let focusActions: [(AppCommand, PaneFocusDirection)] = [
-        (.focusLeft, .left),
-        (.focusDown, .down),
-        (.focusUp, .up),
-        (.focusRight, .right),
-    ]
-
-    private static let resizeActions: [(AppCommand, PaneFocusDirection)] = [
-        (.resizeLeft, .left),
-        (.resizeDown, .down),
-        (.resizeUp, .up),
-        (.resizeRight, .right),
-    ]
-
-    func handle(_ event: NSEvent) -> KeyDisposition {
-        let qt = QuickTerminalService.shared
-        guard qt.isVisible else { return .passThrough }
-        let state = qt.splitState
-
-        // Quick-terminal toggle keystroke arrived while Orchard itself is
-        // active. The same shortcut is also registered as a Carbon global
-        // hot key (see QuickTerminalService.registerHotKey) for when other
-        // apps are frontmost.
-        if HotkeyRegistry.matches(event, command: .toggleQuickTerminal) {
-            NotificationCenter.default.post(name: .toggleQuickTerminal, object: nil)
-            return .handled
-        }
-
-        if HotkeyRegistry.matches(event, command: .splitRight) {
-            guard let paneID = state.focusedPaneID else { return .passThrough }
-            state.split(paneID: paneID, direction: .horizontal)
-            return .handled
-        }
-        if HotkeyRegistry.matches(event, command: .splitDown) {
-            guard let paneID = state.focusedPaneID else { return .passThrough }
-            state.split(paneID: paneID, direction: .vertical)
-            return .handled
-        }
-        if HotkeyRegistry.matches(event, command: .closePane) {
-            guard let paneID = state.focusedPaneID else { return .passThrough }
-            state.requestClosePane(paneID)
-            return .handled
-        }
-        if HotkeyRegistry.matches(event, command: .zoomPane) {
-            guard let paneID = state.focusedPaneID else { return .passThrough }
-            state.tab.toggleZoom(paneID: paneID)
-            return .handled
-        }
-        if let (_, dir) = Self.focusActions.first(where: { HotkeyRegistry.matches(event, command:$0.0) }) {
-            guard let focusedID = state.focusedPaneID else { return .passThrough }
-            if let bestID = state.splitRoot.nearestPane(from: focusedID, direction: dir) {
-                state.focusPane(bestID)
-            }
-            return .handled
-        }
-        if let (_, dir) = Self.resizeActions.first(where: { HotkeyRegistry.matches(event, command:$0.0) }) {
-            state.resize(dir)
-            return .handled
-        }
-
-        return .passThrough
-    }
-}
-
 /// App-level hotkeys for the main window: split, close, focus, resize, tab
 /// cycling, project navigation, new tab, new project, Cmd+1-9 tab selection,
 /// etc. Runs after the palette and quick-terminal responders.
@@ -103,19 +9,6 @@ final class MainAppResponder: KeyResponder {
     private let projectStore: ProjectStore
     weak var mainWindow: NSWindow?
 
-    private static let focusActions: [(AppCommand, PaneFocusDirection)] = [
-        (.focusLeft, .left),
-        (.focusDown, .down),
-        (.focusUp, .up),
-        (.focusRight, .right),
-    ]
-
-    private static let resizeActions: [(AppCommand, PaneFocusDirection)] = [
-        (.resizeLeft, .left),
-        (.resizeDown, .down),
-        (.resizeUp, .up),
-        (.resizeRight, .right),
-    ]
 
     init(appState: AppState, projectStore: ProjectStore) {
         self.appState = appState
@@ -214,13 +107,13 @@ final class MainAppResponder: KeyResponder {
             return .handled
         }
 
-        if let (_, dir) = Self.focusActions.first(where: { HotkeyRegistry.matches(event, command:$0.0) }) {
+        if let dir = PaneCommandRouting.focusDirection(for: event) {
             guard let projectID = appState.activeProjectID else { return .passThrough }
             appState.focusPaneInDirection(dir, projectID: projectID)
             return .handled
         }
 
-        if let (_, dir) = Self.resizeActions.first(where: { HotkeyRegistry.matches(event, command:$0.0) }) {
+        if let dir = PaneCommandRouting.resizeDirection(for: event) {
             guard let projectID = appState.activeProjectID else { return .passThrough }
             appState.resizePane(dir, projectID: projectID)
             return .handled

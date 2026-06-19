@@ -1,22 +1,6 @@
 import AppKit
 import Foundation
 
-@MainActor
-final class HotkeyCaptureState {
-    static let shared = HotkeyCaptureState()
-    var isCapturing = false
-}
-
-struct HotkeyShortcut: Identifiable {
-    let id: String
-    let keyCode: UInt16
-    let modifiers: NSEvent.ModifierFlags
-
-    func matches(_ event: NSEvent) -> Bool {
-        event.keyCode == keyCode && event.modifierFlags.intersection(.deviceIndependentFlagsMask) == modifiers
-    }
-}
-
 enum HotkeyRegistry {
     private static let keyCodes: [String: UInt16] = [
         "a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5,

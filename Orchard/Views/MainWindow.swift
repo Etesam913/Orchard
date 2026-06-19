@@ -43,15 +43,24 @@ struct MainWindow: View {
     // back to its `idealWidth` every time the user hides/shows it.
     @AppStorage("orchard.diffSidebar.width")
     private var diffSidebarWidth: Double = 425
+    // Side-by-side keeps its own remembered width and defaults a little
+    // narrower than unified — two columns otherwise crowd the editor.
+    @AppStorage("orchard.diffSidebar.splitWidth")
+    private var diffSplitSidebarWidth: Double = 450
     // Same story for the project (left) sidebar: NavigationSplitView resets
     // the column to its `idealWidth` whenever columnVisibility flips back
     // from .detailOnly to .automatic.
     @AppStorage("orchard.projectSidebar.width")
     private var projectSidebarWidth: Double = 180
+    // Unified vs. side-by-side diff layout. Persisted so the choice sticks
+    // across launches, like GitHub's split/unified preference.
+    @AppStorage("orchard.diffSplitView")
+    private var isDiffSplitView = false
 
     // Shared so the toolbar search field matches the diff panel's minimum
     // width exactly.
     private let diffSidebarMinWidth: CGFloat = 480
+    private let diffSplitSidebarMinWidth: CGFloat = 440
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -101,6 +110,7 @@ struct MainWindow: View {
                     DiffSidebar(
                         projectPath: project?.path ?? "",
                         state: diffState,
+                        splitView: isDiffSplitView,
                         searchQuery: diffSearchQuery,
                         searchToken: diffSearchToken,
                         searchNextToken: diffSearchNextToken,
@@ -109,7 +119,11 @@ struct MainWindow: View {
                             diffSearchMatchIndex = index
                         }
                     )
-                    .frame(minWidth: diffSidebarMinWidth, idealWidth: diffSidebarWidth, maxWidth: 1200)
+                    .frame(
+                        minWidth: isDiffSplitView ? diffSplitSidebarMinWidth : diffSidebarMinWidth,
+                        idealWidth: isDiffSplitView ? diffSplitSidebarWidth : diffSidebarWidth,
+                        maxWidth: 1200
+                    )
                     .background(
                         GeometryReader { proxy in
                             Color.clear.preference(
@@ -122,8 +136,13 @@ struct MainWindow: View {
                         // Ignore the transient 0 frame during teardown so we
                         // don't overwrite the last real width with garbage.
                         guard width > 1 else { return }
-                        diffSidebarWidth = width
+                        if isDiffSplitView { diffSplitSidebarWidth = width }
+                        else { diffSidebarWidth = width }
                     }
+                    // Re-key on view mode so HSplitView re-applies the (narrower)
+                    // side-by-side idealWidth instead of holding the unified
+                    // divider position when the user toggles.
+                    .id(isDiffSplitView)
                 }
             }
             .task(id: activeProject?.id) {
@@ -146,7 +165,7 @@ struct MainWindow: View {
                                 matchIndex: diffSearchMatchIndex,
                                 // Track the diff panel's live width so the two
                                 // line up no matter how the divider is dragged.
-                                width: CGFloat(diffSidebarWidth),
+                                width: CGFloat(isDiffSplitView ? diffSplitSidebarWidth : diffSidebarWidth),
                                 focusTrigger: diffSearchFocusTrigger,
                                 onSubmit: { diffSearchNextToken += 1 },
                                 onClose: { closeDiffSearch() }
@@ -168,6 +187,13 @@ struct MainWindow: View {
                             }
                             .disabled(project == nil)
                             .help("Search diff")
+                            Button {
+                                isDiffSplitView.toggle()
+                            } label: {
+                                Image(systemName: isDiffSplitView ? "rectangle.split.2x1.fill" : "rectangle.split.2x1")
+                            }
+                            .disabled(project == nil)
+                            .help(isDiffSplitView ? "Switch to unified view" : "Switch to side-by-side view")
                         }
                     }
                     Button {
@@ -284,98 +310,6 @@ struct MainWindow: View {
     }
 }
 
-struct WelcomeView: View {
-    private var shortcuts: [(AppCommand, String)] {
-        [
-            (.openProject, "Open a project"),
-            (.toggleCommandPalette, "Command palette"),
-            (.toggleSidebar, "Toggle sidebar"),
-        ]
-    }
-
-    var body: some View {
-        VStack(spacing: 20) {
-            Spacer()
-
-            VStack(spacing: 6) {
-                Text("Orchard")
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(OrchardTheme.fg)
-                Text("No project selected")
-                    .font(.system(size: 12))
-                    .foregroundStyle(OrchardTheme.fgMuted)
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(shortcuts, id: \.0) { action, label in
-                    HStack(spacing: 10) {
-                        Text(label)
-                            .font(.system(size: 12))
-                            .foregroundStyle(OrchardTheme.fgMuted)
-                            .frame(width: 160, alignment: .leading)
-                        Text(HotkeyRegistry.displayString(for: HotkeyRegistry.selectedShortcutString(for: action)))
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(OrchardTheme.fgDim)
-                    }
-                }
-            }
-            .padding(.top, 4)
-
-            Spacer()
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(32)
-    }
-}
-
-struct EmptyProjectView: View {
-    let project: Project
-
-    private var shortcuts: [(AppCommand, String)] {
-        [
-            (.newTab, "New tab"),
-            (.openProject, "Open another project"),
-            (.toggleCommandPalette, "Command palette"),
-            (.toggleSidebar, "Toggle sidebar"),
-        ]
-    }
-
-    var body: some View {
-        VStack(spacing: 20) {
-            Spacer()
-
-            VStack(spacing: 6) {
-                Text(project.name)
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(OrchardTheme.fg)
-                Text(project.path)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(OrchardTheme.fgMuted)
-                    .textSelection(.enabled)
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(shortcuts, id: \.0) { action, label in
-                    HStack(spacing: 10) {
-                        Text(label)
-                            .font(.system(size: 12))
-                            .foregroundStyle(OrchardTheme.fgMuted)
-                            .frame(width: 160, alignment: .leading)
-                        Text(HotkeyRegistry.displayString(for: HotkeyRegistry.selectedShortcutString(for: action)))
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(OrchardTheme.fgDim)
-                    }
-                }
-            }
-            .padding(.top, 4)
-
-            Spacer()
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(32)
-    }
-}
-
 struct WorkspaceView: View {
     let project: Project
     @Environment(AppState.self)
@@ -415,272 +349,10 @@ struct WorkspaceView: View {
     }
 }
 
-/// Small badge shown in the corner of a tab while one of its panes is zoomed.
-/// Clicking it exits zoom and restores the full split layout.
-struct ZoomIndicator: View {
-    let onExit: () -> Void
-
-    var body: some View {
-        Button(action: onExit) {
-            HStack(spacing: 4) {
-                Image(systemName: "arrow.down.right.and.arrow.up.left")
-                Text("Zoomed")
-            }
-            .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(OrchardTheme.fg)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .glassEffect(.regular.interactive(), in: .capsule)
-        .help("Exit zoom")
-    }
-}
-
-private struct WindowStyler: NSViewRepresentable {
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
-
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async {
-            guard let window = view.window else { return }
-            window.titlebarAppearsTransparent = true
-            window.titlebarSeparatorStyle = .none
-            window.tabbingMode = .disallowed
-            // Let the content view extend under the titlebar so the sidebar
-            // and terminal paint continuously up to the top of the window.
-            // Without this the titlebar floats above the sidebar with a
-            // visible boundary, which is jarring when both are translucent.
-            window.styleMask.insert(.fullSizeContentView)
-            WindowAppearance.sync(window: window)
-            context.coordinator.observe(window: window)
-            // Intercept the close button to hide instead of close,
-            // preserving terminal surfaces and running processes.
-            context.coordinator.interceptClose(window: window)
-        }
-        return view
-    }
-
-    func updateNSView(_: NSView, context _: Context) {}
-
-    final class Coordinator: NSObject, NSWindowDelegate {
-        nonisolated(unsafe) private var observer: Any?
-        nonisolated(unsafe) weak var swiftuiDelegate: (any NSWindowDelegate)?
-
-        @MainActor
-        func observe(window: NSWindow) {
-            // Re-apply on config change. AppKit also rebuilds the titlebar
-            // subviews on becomeMain / fullscreen transitions, so we resync
-            // there too via the delegate hooks below.
-            observer = NotificationCenter.default.addObserver(
-                forName: .orchardConfigDidChange,
-                object: nil,
-                queue: .main
-            ) { [weak window] _ in
-                guard let window else { return }
-                MainActor.assumeIsolated { WindowAppearance.sync(window: window) }
-            }
-        }
-
-        func windowDidBecomeMain(_ notification: Notification) {
-            guard let window = notification.object as? NSWindow else { return }
-            WindowAppearance.sync(window: window)
-            swiftuiDelegate?.windowDidBecomeMain?(notification)
-        }
-
-        func windowDidEnterFullScreen(_ notification: Notification) {
-            guard let window = notification.object as? NSWindow else { return }
-            WindowAppearance.sync(window: window)
-            swiftuiDelegate?.windowDidEnterFullScreen?(notification)
-        }
-
-        func windowDidExitFullScreen(_ notification: Notification) {
-            guard let window = notification.object as? NSWindow else { return }
-            WindowAppearance.sync(window: window)
-            swiftuiDelegate?.windowDidExitFullScreen?(notification)
-        }
-
-        @MainActor
-        func interceptClose(window: NSWindow) {
-            swiftuiDelegate = window.delegate
-            window.delegate = self
-        }
-
-        func windowShouldClose(_ sender: NSWindow) -> Bool {
-            // During app termination AppKit asks every window if it can close.
-            // The "hide instead of close" trick is only for the user clicking
-            // the red close button while the app keeps running — when we're
-            // shutting down, let the window actually close so the process can
-            // exit instead of leaving an invisible window holding the app open.
-            if AppTerminationState.isTerminating { return true }
-            sender.orderOut(nil)
-            return false
-        }
-
-        /// Forward everything else to SwiftUI's delegate
-        nonisolated override func responds(to aSelector: Selector!) -> Bool {
-            if super.responds(to: aSelector) { return true }
-            return swiftuiDelegate?.responds(to: aSelector) ?? false
-        }
-
-        nonisolated override func forwardingTarget(for aSelector: Selector!) -> Any? {
-            if swiftuiDelegate?.responds(to: aSelector) == true { return swiftuiDelegate }
-            return super.forwardingTarget(for: aSelector)
-        }
-
-        deinit {
-            if let observer { NotificationCenter.default.removeObserver(observer) }
-        }
-    }
-}
-
 private struct DiffSidebarWidthKey: PreferenceKey {
     static let defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
-    }
-}
-
-/// Per-project snapshot of the diff search field, swapped in/out on project
-/// switch so each project keeps its own search.
-private struct DiffSearchState {
-    var isVisible = false
-    var query = ""
-}
-
-/// Toolbar search box that replaces the diff stats/refresh controls while
-/// active. Enter scrolls the diff to the next match; Escape or the ✕ closes it.
-private struct DiffSearchField: View {
-    @Binding var query: String
-    let matchCount: Int
-    let matchIndex: Int
-    let width: CGFloat
-    let focusTrigger: Int
-    let onSubmit: () -> Void
-    let onClose: () -> Void
-
-    private var countLabel: String? {
-        guard !query.isEmpty else { return nil }
-        return matchCount == 0 ? "No results" : "\(matchIndex)/\(matchCount)"
-    }
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
-                .font(.system(size: 12))
-            // AppKit-backed: a SwiftUI TextField in an NSToolbar can't reliably
-            // steal first-responder from the WebView, so focus silently fails.
-            // This wrapper calls makeFirstResponder directly.
-            FocusableSearchField(
-                text: $query,
-                focusTrigger: focusTrigger,
-                onSubmit: onSubmit,
-                onCancel: onClose
-            )
-            .frame(maxWidth: .infinity)
-            if let countLabel {
-                Text(countLabel)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
-            Button(action: onClose) {
-                Image(systemName: "xmark.circle.fill")
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            .help("Close search")
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .frame(width: width)
-    }
-}
-
-/// A borderless NSTextField that can be programmatically focused. `focusTrigger`
-/// is a monotonic counter; whenever it changes the field grabs first responder,
-/// which is the only reliable way to focus a control living inside an NSToolbar.
-private struct FocusableSearchField: NSViewRepresentable {
-    @Binding var text: String
-    var focusTrigger: Int
-    var onSubmit: () -> Void
-    var onCancel: () -> Void
-
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
-
-    func makeNSView(context: Context) -> NSTextField {
-        let field = NSTextField()
-        field.isBordered = false
-        field.drawsBackground = false
-        field.focusRingType = .none
-        field.font = .systemFont(ofSize: 13)
-        field.placeholderString = "Search diff"
-        field.delegate = context.coordinator
-        field.lineBreakMode = .byTruncatingTail
-        field.usesSingleLineMode = true
-        field.cell?.isScrollable = true
-        field.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        return field
-    }
-
-    func updateNSView(_ field: NSTextField, context: Context) {
-        context.coordinator.parent = self
-        if field.stringValue != text { field.stringValue = text }
-        guard context.coordinator.lastFocusTrigger != focusTrigger else { return }
-        context.coordinator.lastFocusTrigger = focusTrigger
-        // Defer: on first appearance the field isn't in a window yet.
-        DispatchQueue.main.async {
-            guard let window = field.window else { return }
-            window.makeFirstResponder(field)
-        }
-    }
-
-    final class Coordinator: NSObject, NSTextFieldDelegate {
-        var parent: FocusableSearchField
-        // Start at Int.min so the first real trigger value always differs and
-        // focuses on initial appearance.
-        var lastFocusTrigger = Int.min
-
-        init(_ parent: FocusableSearchField) { self.parent = parent }
-
-        func controlTextDidChange(_ obj: Notification) {
-            guard let field = obj.object as? NSTextField else { return }
-            parent.text = field.stringValue
-        }
-
-        func control(_: NSControl, textView _: NSTextView, doCommandBy selector: Selector) -> Bool {
-            switch selector {
-            case #selector(NSResponder.insertNewline(_:)):
-                parent.onSubmit()
-                return true
-            case #selector(NSResponder.cancelOperation(_:)):
-                parent.onCancel()
-                return true
-            default:
-                return false
-            }
-        }
-    }
-}
-
-private struct DiffStatsToolbarLabel: View {
-    let stats: ProjectDiffStats
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Text("+\(stats.additions)")
-                .foregroundStyle(Color(nsColor: .systemGreen))
-            Text("-\(stats.deletions)")
-                .foregroundStyle(Color(nsColor: .systemRed))
-        }
-        .font(.system(size: 13, weight: .semibold, design: .monospaced))
-        .padding(.horizontal, 12)
-        .accessibilityLabel("\(stats.additions) additions, \(stats.deletions) deletions")
     }
 }
 

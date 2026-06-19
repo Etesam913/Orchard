@@ -1,190 +1,6 @@
-import AppKit
-import SwiftUI
-import WebKit
+import Foundation
 
-/// WebKit-backed diff renderer. SwiftUI hosts the sidebar state, while WebKit
-/// handles the large text/layout surface where it is substantially cheaper.
-struct PierreDiffView: NSViewRepresentable {
-    let diff: String
-    let projectPath: String
-    /// Current text typed into the diff search field.
-    var searchQuery: String = ""
-    /// Bumped (debounced) as the user types, so the highlight pass and match
-    /// count refresh while typing.
-    var searchToken: Int = 0
-    /// Bumped on each Enter to jump to the next match without re-scanning.
-    var searchNextToken: Int = 0
-    /// Reports `(matchCount, currentIndex)` back as the WebView searches.
-    /// `currentIndex` is 1-based, or 0 when there are no matches.
-    var onSearchResult: ((Int, Int) -> Void)? = nil
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
-
-    func makeNSView(context: Context) -> WKWebView {
-        let configuration = WKWebViewConfiguration()
-        configuration.defaultWebpagePreferences.allowsContentJavaScript = true
-        configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
-        configuration.userContentController.add(context.coordinator, name: "orchardCopy")
-        configuration.userContentController.add(context.coordinator, name: "orchardOpenInEditor")
-        configuration.userContentController.add(context.coordinator, name: "orchardSearchResult")
-
-        let webView = WKWebView(frame: .zero, configuration: configuration)
-        webView.navigationDelegate = context.coordinator
-        webView.allowsBackForwardNavigationGestures = false
-        webView.setValue(false, forKey: "drawsBackground")
-        webView.loadHTMLString(DiffViewerHTML.source, baseURL: URL(string: "https://orchard.local/"))
-
-        context.coordinator.webView = webView
-        return webView
-    }
-
-    func updateNSView(_ webView: WKWebView, context: Context) {
-        context.coordinator.projectPath = projectPath
-        context.coordinator.onSearchResult = onSearchResult
-        context.coordinator.currentSearchQuery = searchQuery
-        context.coordinator.render(diff: diff, in: webView)
-        context.coordinator.runSearch(query: searchQuery, token: searchToken, in: webView)
-        context.coordinator.advanceSearch(token: searchNextToken, in: webView)
-    }
-
-    static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
-        webView.configuration.userContentController.removeScriptMessageHandler(forName: "orchardCopy")
-        webView.configuration.userContentController.removeScriptMessageHandler(forName: "orchardOpenInEditor")
-        webView.configuration.userContentController.removeScriptMessageHandler(forName: "orchardSearchResult")
-        webView.navigationDelegate = nil
-        coordinator.webView = nil
-    }
-
-    final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
-        weak var webView: WKWebView?
-        var projectPath: String = ""
-        var onSearchResult: ((Int, Int) -> Void)?
-        /// The query currently in the field. Kept so the highlight pass can be
-        /// re-applied after a diff re-render (e.g. switching back to a project
-        /// whose search was active) — rendering wipes the prior `<mark>`s.
-        var currentSearchQuery = ""
-
-        private var isPageLoaded = false
-        private var pendingDiff: String?
-        private var renderedDiff: String?
-        private var lastSearchToken = 0
-        private var lastSearchNextToken = 0
-
-        func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
-            switch message.name {
-            case "orchardCopy":
-                guard let text = message.body as? String, !text.isEmpty else { return }
-                let pasteboard = NSPasteboard.general
-                pasteboard.clearContents()
-                pasteboard.setString(text, forType: .string)
-            case "orchardOpenInEditor":
-                guard let body = message.body as? [String: Any],
-                      let relativePath = body["path"] as? String,
-                      !relativePath.isEmpty,
-                      !projectPath.isEmpty
-                else { return }
-                EditorLauncher.openInVSCode(relativePath: relativePath, projectRoot: projectPath)
-            case "orchardSearchResult":
-                guard let body = message.body as? [String: Any],
-                      let count = body["count"] as? Int,
-                      let index = body["index"] as? Int
-                else { return }
-                onSearchResult?(count, index)
-            default:
-                break
-            }
-        }
-
-        func render(diff: String, in webView: WKWebView) {
-            guard diff != renderedDiff else { return }
-            pendingDiff = diff
-            self.webView = webView
-            flushPendingDiff()
-        }
-
-        /// Re-run the highlight pass for the current query. Only fires when the
-        /// token changes so a fresh `updateNSView` (e.g. a diff refresh) doesn't
-        /// re-trigger the previous search.
-        func runSearch(query: String, token: Int, in webView: WKWebView) {
-            guard token != lastSearchToken else { return }
-            lastSearchToken = token
-
-            let payload = ["query": query]
-            guard let data = try? JSONSerialization.data(withJSONObject: payload),
-                  let json = String(data: data, encoding: .utf8)
-            else { return }
-
-            webView.evaluateJavaScript("window.orchardSearch?.(\(json));")
-        }
-
-        /// Jump to the next match (Enter), without re-scanning.
-        func advanceSearch(token: Int, in webView: WKWebView) {
-            guard token != lastSearchNextToken else { return }
-            lastSearchNextToken = token
-            webView.evaluateJavaScript("window.orchardSearchNext?.();")
-        }
-
-        func webView(_ webView: WKWebView, didFinish _: WKNavigation!) {
-            self.webView = webView
-            isPageLoaded = true
-            flushPendingDiff()
-        }
-
-        func webView(_ webView: WKWebView, didFail _: WKNavigation!, withError error: Error) {
-            showBridgeError(error.localizedDescription, in: webView)
-        }
-
-        func webView(_ webView: WKWebView, didFailProvisionalNavigation _: WKNavigation!, withError error: Error) {
-            showBridgeError(error.localizedDescription, in: webView)
-        }
-
-        private func flushPendingDiff() {
-            guard isPageLoaded, let webView, let diff = pendingDiff else { return }
-
-            let payload = ["diff": diff]
-            guard let data = try? JSONSerialization.data(withJSONObject: payload),
-                  let json = String(data: data, encoding: .utf8)
-            else {
-                showBridgeError("Unable to serialize diff payload.", in: webView)
-                return
-            }
-
-            webView.evaluateJavaScript("window.orchardRenderDiff(\(json));") { [weak self] _, error in
-                if let error {
-                    self?.showBridgeError(error.localizedDescription, in: webView)
-                    return
-                }
-
-                self?.renderedDiff = diff
-                self?.pendingDiff = nil
-                self?.reapplySearch(in: webView)
-            }
-        }
-
-        /// Re-highlight the active query after the diff DOM was rebuilt.
-        private func reapplySearch(in webView: WKWebView) {
-            guard !currentSearchQuery.isEmpty else { return }
-            let payload = ["query": currentSearchQuery]
-            guard let data = try? JSONSerialization.data(withJSONObject: payload),
-                  let json = String(data: data, encoding: .utf8)
-            else { return }
-            webView.evaluateJavaScript("window.orchardSearch?.(\(json));")
-        }
-
-        private func showBridgeError(_ message: String, in webView: WKWebView) {
-            let payload = ["message": message]
-            guard let data = try? JSONSerialization.data(withJSONObject: payload),
-                  let json = String(data: data, encoding: .utf8)
-            else { return }
-
-            webView.evaluateJavaScript("window.orchardShowError?.(\(json));")
-        }
-    }
-}
-
-private enum DiffViewerHTML {
+enum DiffViewerHTML {
     static let source = #"""
 <!doctype html>
 <html lang="en">
@@ -217,6 +33,8 @@ html, body {
     height: 100%;
     margin: 0;
     background: transparent;
+    /* Kill the macOS rubber-band bounce on horizontal overscroll. */
+    overscroll-behavior-x: none;
 }
 body {
     overflow-x: hidden;
@@ -347,6 +165,8 @@ body {
 .patch-file-body {
     overflow-x: auto;
     overflow-y: hidden;
+    /* No elastic bounce when scrolling a wide diff past its edge. */
+    overscroll-behavior-x: none;
 }
 .patch-file.collapsed .patch-file-body {
     display: none;
@@ -401,9 +221,9 @@ body {
     padding: 0 10px;
     white-space: pre;
 }
-.diff-row.add > td { background: var(--add-bg); color: var(--add-fg); }
+.diff-row.add > td { background: var(--add-bg); }
 .diff-row.add > .gutter { background: var(--add-gutter); color: var(--add-fg); }
-.diff-row.del > td { background: var(--del-bg); color: var(--del-fg); }
+.diff-row.del > td { background: var(--del-bg); }
 .diff-row.del > .gutter { background: var(--del-gutter); color: var(--del-fg); }
 .diff-row.context > .content { color: CanvasText; }
 .diff-row.nonewline > .content {
@@ -414,8 +234,8 @@ body {
     user-select: none;
     -webkit-user-select: none;
 }
-.diff-row.add > .content::before { content: "+ "; }
-.diff-row.del > .content::before { content: "- "; }
+.diff-row.add > .content::before { content: "+ "; color: var(--add-fg); }
+.diff-row.del > .content::before { content: "- "; color: var(--del-fg); }
 .diff-row.context > .content::before { content: "  "; }
 .patch-file-notice {
     padding: 10px 12px;
@@ -431,13 +251,105 @@ mark.orchard-search-hit.current {
     background: light-dark(#ffd43b, #b38600);
     box-shadow: 0 0 0 1px light-dark(#e6a700, #ffd43b);
 }
+/* Syntax highlighting (GitHub-like palette). Backgrounds are intentionally
+   omitted so the add/del row tint shows through the tokens. */
+.hljs-comment, .hljs-quote { color: light-dark(#6e7781, #8b949e); font-style: italic; }
+.hljs-keyword, .hljs-selector-tag, .hljs-doctag, .hljs-section { color: light-dark(#cf222e, #ff7b72); }
+.hljs-literal, .hljs-number, .hljs-symbol, .hljs-bullet { color: light-dark(#0550ae, #79c0ff); }
+.hljs-built_in, .hljs-type, .hljs-class .hljs-title { color: light-dark(#953800, #ffa657); }
+.hljs-string, .hljs-regexp, .hljs-meta .hljs-string, .hljs-char.escape_ { color: light-dark(#0a3069, #a5d6ff); }
+.hljs-title, .hljs-title.function_, .hljs-title.class_ { color: light-dark(#8250df, #d2a8ff); }
+.hljs-attr, .hljs-attribute, .hljs-variable, .hljs-template-variable { color: light-dark(#0550ae, #79c0ff); }
+.hljs-tag, .hljs-name, .hljs-selector-id, .hljs-selector-class, .hljs-selector-attr, .hljs-selector-pseudo { color: light-dark(#116329, #7ee787); }
+.hljs-meta { color: light-dark(#57606a, #8b949e); }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: 600; }
+.hljs-link { text-decoration: underline; }
+/* Side-by-side (split) view. Old lines render in the left pane, new in the
+   right, and each pane scrolls horizontally on its own. The two tables stay
+   row-aligned because every row is a single non-wrapping line of equal height. */
+.split-wrap { display: flex; align-items: flex-start; width: 100%; }
+.split-side { flex: 1 1 0; min-width: 0; overflow-x: auto; overscroll-behavior-x: none; }
+.split-side.right { border-left: 1px solid var(--border); }
+.diff-table.split-col { width: max-content; min-width: 100%; }
+.split-col .content { width: auto; }
+.split-col td.del { background: var(--del-bg); }
+.split-col .gutter.del { background: var(--del-gutter); color: var(--del-fg); }
+.split-col td.add { background: var(--add-bg); }
+.split-col .gutter.add { background: var(--add-gutter); color: var(--add-fg); }
+.split-col td.empty { background: light-dark(#f6f8fa, color-mix(in srgb, CanvasText 3%, transparent)); }
+.split-col .content.nonewline { color: var(--hunk-fg); font-style: italic; }
 </style>
+<script>/*__ORCHARD_HLJS__*/</script>
 </head>
 <body>
 <main id="root"><div class="message">Loading diff...</div></main>
 <script>
 (() => {
     const root = () => document.getElementById("root");
+
+    // Maps a file extension (or extensionless basename like "Makefile") to a
+    // highlight.js language id. Anything not listed, or a language missing from
+    // the bundled build, falls back to plain text.
+    const LANG_BY_EXT = {
+        swift: "swift", js: "javascript", jsx: "javascript", mjs: "javascript", cjs: "javascript",
+        ts: "typescript", tsx: "typescript", py: "python", rb: "ruby", go: "go", rs: "rust",
+        java: "java", kt: "kotlin", kts: "kotlin", c: "c", h: "c", cpp: "cpp", cc: "cpp",
+        cxx: "cpp", hpp: "cpp", hh: "cpp", m: "objectivec", mm: "objectivec", cs: "csharp",
+        php: "php", json: "json", css: "css", scss: "scss", less: "less", html: "xml",
+        htm: "xml", xml: "xml", vue: "xml", svg: "xml", md: "markdown", markdown: "markdown",
+        sh: "bash", bash: "bash", zsh: "bash", yml: "yaml", yaml: "yaml", toml: "ini",
+        ini: "ini", sql: "sql", lua: "lua", pl: "perl", r: "r", dart: "dart", scala: "scala",
+        diff: "diff", patch: "diff", makefile: "makefile", dockerfile: "dockerfile",
+        gradle: "groovy", groovy: "groovy"
+    };
+
+    function languageForPath(path) {
+        if (!path) return null;
+        const name = path.split("/").pop().toLowerCase();
+        const dot = name.lastIndexOf(".");
+        const ext = dot >= 0 ? name.slice(dot + 1) : name;
+        const lang = LANG_BY_EXT[ext];
+        return (lang && window.hljs && hljs.getLanguage(lang)) ? lang : null;
+    }
+
+    // false = unified (single column), true = side-by-side. Set per render.
+    let splitView = false;
+
+    // Fill a content cell with syntax-highlighted markup, falling back to plain
+    // text for unknown languages, the no-newline marker, or a highlight failure.
+    function fillContent(cell, text, lang, kind) {
+        if (lang && kind !== "nonewline") {
+            try {
+                cell.innerHTML = hljs.highlight(text, { language: lang, ignoreIllegals: true }).value;
+                return;
+            } catch (_) {}
+        }
+        cell.textContent = text;
+    }
+
+    // Pair a hunk's rows for side-by-side display: deletions align left,
+    // additions align right, context spans both. Runs of del/add are zipped by
+    // index; an unmatched side becomes null (a faint empty cell).
+    function pairSplitRows(rows) {
+        const out = [];
+        let dels = [];
+        let adds = [];
+        function flush() {
+            const n = Math.max(dels.length, adds.length);
+            for (let i = 0; i < n; i++) out.push({ left: dels[i] || null, right: adds[i] || null });
+            dels = [];
+            adds = [];
+        }
+        for (const row of rows) {
+            if (row.kind === "del") dels.push(row);
+            else if (row.kind === "add") adds.push(row);
+            else if (row.kind === "nonewline") { flush(); out.push({ kind: "nonewline", left: row, right: row }); }
+            else { flush(); out.push({ left: row, right: row }); }
+        }
+        flush();
+        return out;
+    }
 
     function setMessage(text) {
         const r = root();
@@ -607,10 +519,115 @@ mark.orchard-search-hit.current {
         return el;
     }
 
+    function appendUnifiedHunk(tbody, hunk, lang) {
+        for (const row of hunk.rows) {
+            const tr = document.createElement("tr");
+            tr.className = `diff-row ${row.kind}`;
+
+            const oldNo = document.createElement("td");
+            oldNo.className = "gutter old";
+            oldNo.textContent = row.oldNo == null ? "" : String(row.oldNo);
+            tr.appendChild(oldNo);
+
+            const newNo = document.createElement("td");
+            newNo.className = "gutter new";
+            newNo.textContent = row.newNo == null ? "" : String(row.newNo);
+            tr.appendChild(newNo);
+
+            const content = document.createElement("td");
+            content.className = "content";
+            fillContent(content, row.text, lang, row.kind);
+            tr.appendChild(content);
+
+            tbody.appendChild(tr);
+        }
+    }
+
+    function appendSplitHeaderRow(tbody, text) {
+        const tr = document.createElement("tr");
+        tr.className = "hunk-header-row";
+        const cell = document.createElement("td");
+        cell.colSpan = 2;
+        cell.textContent = text;
+        tr.appendChild(cell);
+        tbody.appendChild(tr);
+    }
+
+    // Build one side's row (gutter + content). `side` is "left" (old/del) or
+    // "right" (new/add). An absent counterpart renders a faint empty cell; a
+    // zero-width space keeps every empty cell a full line tall so the two
+    // panes' rows line up vertically.
+    function appendSideRow(tbody, pair, side, lang) {
+        const tr = document.createElement("tr");
+        tr.className = "diff-row split-row";
+
+        if (pair.kind === "nonewline") {
+            const cell = document.createElement("td");
+            cell.className = "content nonewline";
+            cell.colSpan = 2;
+            cell.textContent = side === "left" ? pair.left.text : "\u200B";
+            tr.appendChild(cell);
+            tbody.appendChild(tr);
+            return;
+        }
+
+        const row = side === "left" ? pair.left : pair.right;
+        const changeClass = side === "left" ? "del" : "add";
+        const isChange = !!row && row.kind === changeClass;
+        const numField = side === "left" ? "oldNo" : "newNo";
+
+        const gutter = document.createElement("td");
+        gutter.className = "gutter " + (side === "left" ? "old" : "new")
+            + (isChange ? " " + changeClass : "") + (row ? "" : " empty");
+        gutter.textContent = row && row[numField] != null ? String(row[numField]) : "";
+        tr.appendChild(gutter);
+
+        const content = document.createElement("td");
+        content.className = "content" + (isChange ? " " + changeClass : "") + (row ? "" : " empty");
+        if (row) fillContent(content, row.text, lang, row.kind);
+        else content.textContent = "\u200B";
+        tr.appendChild(content);
+
+        tbody.appendChild(tr);
+    }
+
+    function makeSplitSide(side, tbody) {
+        const div = document.createElement("div");
+        div.className = "split-side " + side;
+        const table = document.createElement("table");
+        table.className = "diff-table split-col";
+        table.appendChild(tbody);
+        div.appendChild(table);
+        return div;
+    }
+
+    // Two independently scrolling tables, one per side, kept in lockstep: each
+    // hunk contributes a header row to both and one row per split pair.
+    function renderSplitBody(file, lang) {
+        const wrap = document.createElement("div");
+        wrap.className = "split-wrap";
+        const leftBody = document.createElement("tbody");
+        const rightBody = document.createElement("tbody");
+
+        for (const hunk of file.hunks) {
+            appendSplitHeaderRow(leftBody, hunk.header);
+            appendSplitHeaderRow(rightBody, "\u200B");
+            for (const pair of pairSplitRows(hunk.rows)) {
+                appendSideRow(leftBody, pair, "left", lang);
+                appendSideRow(rightBody, pair, "right", lang);
+            }
+        }
+
+        wrap.appendChild(makeSplitSide("left", leftBody));
+        wrap.appendChild(makeSplitSide("right", rightBody));
+        return wrap;
+    }
+
     function renderFile(file, index) {
         const section = document.createElement("section");
         section.className = "patch-file";
         section.dataset.fileIndex = String(index);
+        const lang = languageForPath(file.newPath || file.oldPath);
 
         const header = document.createElement("header");
         header.className = "patch-file-header";
@@ -687,6 +704,8 @@ mark.orchard-search-hit.current {
             notice.className = "patch-file-notice";
             notice.textContent = file.binary ? "Binary file" : "No textual changes.";
             body.appendChild(notice);
+        } else if (splitView) {
+            body.appendChild(renderSplitBody(file, lang));
         } else {
             const table = document.createElement("table");
             table.className = "diff-table";
@@ -702,27 +721,7 @@ mark.orchard-search-hit.current {
                 hunkRow.appendChild(cell);
                 tbody.appendChild(hunkRow);
 
-                for (const row of hunk.rows) {
-                    const tr = document.createElement("tr");
-                    tr.className = `diff-row ${row.kind}`;
-
-                    const oldNo = document.createElement("td");
-                    oldNo.className = "gutter old";
-                    oldNo.textContent = row.oldNo == null ? "" : String(row.oldNo);
-                    tr.appendChild(oldNo);
-
-                    const newNo = document.createElement("td");
-                    newNo.className = "gutter new";
-                    newNo.textContent = row.newNo == null ? "" : String(row.newNo);
-                    tr.appendChild(newNo);
-
-                    const content = document.createElement("td");
-                    content.className = "content";
-                    content.textContent = row.text;
-                    tr.appendChild(content);
-
-                    tbody.appendChild(tr);
-                }
+                appendUnifiedHunk(tbody, hunk, lang);
             }
             body.appendChild(table);
         }
@@ -736,6 +735,7 @@ mark.orchard-search-hit.current {
 
     function render(payload) {
         const diff = payload?.diff || "";
+        splitView = !!payload?.split;
         const r = root();
         r.innerHTML = "";
         if (!diff.trim()) {

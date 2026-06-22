@@ -18,6 +18,12 @@ struct DiffSidebar: View {
             content
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(OrchardTheme.strongBorder)
+                .frame(width: 1)
+                .allowsHitTesting(false)
+        }
     }
 
     @ViewBuilder

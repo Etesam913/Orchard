@@ -2,10 +2,8 @@ import AppKit
 
 /// Shared directional hotkey tables for the responder chain.
 ///
-/// Both `MainAppResponder` (main window) and `QuickTerminalResponder` map the
-/// same set of focus/resize commands to directions; centralizing the tables
-/// here keeps the two responders in sync and removes the duplication they
-/// previously each carried.
+/// Centralizes the focus/resize command-to-direction mapping used by the main
+/// responder.
 enum PaneCommandRouting {
     static let focusActions: [(AppCommand, PaneFocusDirection)] = [
         (.focusLeft, .left),

@@ -27,6 +27,8 @@ enum OrchardTheme {
     @MainActor
     static var border: Color { fgAlpha(0.12) }
     @MainActor
+    static var strongBorder: Color { fgAlpha(0.10) }
+    @MainActor
     static var hover: Color { fgAlpha(0.06) }
     @MainActor
     static var accent: Color { Color(nsColor: GhosttyApp.shared.accentColor) }

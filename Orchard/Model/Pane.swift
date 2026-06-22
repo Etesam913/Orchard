@@ -43,6 +43,7 @@ final class Pane: Identifiable {
         view.onCommandSubmitted = nil
         view.onCommandFinished = nil
         view.onProgressActivityChange = nil
+        view.onAssistantOutputActivity = nil
         view.onFocus = nil
         view.onSplitRequest = nil
         view.destroySurface()
@@ -76,9 +77,11 @@ final class Pane: Identifiable {
         return processTitle
     }
 
-    func didSubmitCommand(_ command: String) {
-        guard let assistant = Self.assistantProcessName(from: command) else { return }
+    @discardableResult
+    func didSubmitCommand(_ command: String) -> String? {
+        guard let assistant = Self.assistantProcessName(from: command) else { return nil }
         assistantProcessName = assistant
+        return assistant
     }
 
     private static func isPathLike(_ token: String) -> Bool {
@@ -117,6 +120,7 @@ final class Pane: Identifiable {
         }
         guard let first = tokens.first else { return nil }
         let executable = (first as NSString).lastPathComponent.lowercased()
+        if executable == "agy" || executable.hasPrefix("agy-") { return "agy" }
         if executable == "claude" || executable.hasPrefix("claude-") { return "claude" }
         if executable == "codex" || executable.hasPrefix("codex-") || executable.hasSuffix("/codex") { return "codex" }
         return nil

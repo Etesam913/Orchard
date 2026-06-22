@@ -4,8 +4,8 @@ import Observation
 
 /// Single observable source of truth for UserDefaults-backed preferences.
 ///
-/// Orchard only stores app-shaped state here (window opacity/blur, quick
-/// terminal, hotkeys, etc.). Anything that's a ghostty config setting lives
+/// Orchard only stores app-shaped state here (window opacity/blur, hotkeys,
+/// etc.). Anything that's a ghostty config setting lives
 /// in the user's Ghostty config instead — see `OrchardConfig` for the wrapper
 /// files Orchard generates around it.
 @MainActor @Observable
@@ -74,22 +74,6 @@ final class Preferences {
         GhosttyApp.shared.reloadConfig()
     }
 
-    // MARK: - Quick terminal
-
-    var quickTerminalEnabled: Bool {
-        didSet { defaults.set(quickTerminalEnabled, forKey: Keys.quickTerminalEnabled) }
-    }
-
-    /// Fraction of screen width (0–1).
-    var quickTerminalWidthFraction: Double {
-        didSet { defaults.set(quickTerminalWidthFraction, forKey: Keys.quickTerminalWidth) }
-    }
-
-    /// Fraction of screen height (0–1).
-    var quickTerminalHeightFraction: Double {
-        didSet { defaults.set(quickTerminalHeightFraction, forKey: Keys.quickTerminalHeight) }
-    }
-
     // MARK: - Session
 
     /// Persisted so the app re-opens to the last-used project on launch.
@@ -107,16 +91,8 @@ final class Preferences {
         windowOpacity = (defaults.object(forKey: Keys.windowOpacity) as? Double) ?? 1.0
         windowBlurRadius = defaults.integer(forKey: Keys.windowBlurRadius)
         userGhosttyConfigPath = Self.resolvedDefaultGhosttyConfigPath(defaults: defaults)
-        quickTerminalEnabled = defaults.object(forKey: Keys.quickTerminalEnabled) as? Bool ?? true
-        quickTerminalWidthFraction = Self.clampFraction(defaults.double(forKey: Keys.quickTerminalWidth), fallback: 0.6)
-        quickTerminalHeightFraction = Self.clampFraction(defaults.double(forKey: Keys.quickTerminalHeight), fallback: 0.5)
         activeProjectID = (defaults.string(forKey: Keys.activeProjectID)).flatMap(UUID.init)
         Self.runOneTimeMigrations(defaults: defaults)
-    }
-
-    private static func clampFraction(_ v: Double, fallback: Double) -> Double {
-        guard v > 0 else { return fallback }
-        return max(0.2, min(1.0, v))
     }
 
     private static func resolvedDefaultGhosttyConfigPath(defaults: UserDefaults) -> String {
@@ -165,9 +141,6 @@ final class Preferences {
         static let windowOpacity = "orchard.window.opacity"
         static let windowBlurRadius = "orchard.window.blurRadius"
         static let userGhosttyConfigPath = "orchard.ghostty.userConfigPath"
-        static let quickTerminalEnabled = "orchard.quickTerminal.enabled"
-        static let quickTerminalWidth = "orchard.quickTerminal.width"
-        static let quickTerminalHeight = "orchard.quickTerminal.height"
         static let activeProjectID = "orchard.activeProjectID"
         static let migrationV2GhosttyConfigOwned = "orchard.migration.v2_ghostty_config_owned"
     }

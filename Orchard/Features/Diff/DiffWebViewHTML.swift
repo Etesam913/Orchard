@@ -27,6 +27,9 @@ enum DiffViewerHTML {
     --del-fg: light-dark(#d1242f, #ff8a87);
     --del-bg: light-dark(#ffebe9, color-mix(in srgb, #f85149 18%, transparent));
     --del-gutter: light-dark(#ffc1bf, color-mix(in srgb, #f85149 35%, transparent));
+    --scrollbar-track: light-dark(color-mix(in srgb, CanvasText 7%, transparent), color-mix(in srgb, CanvasText 10%, transparent));
+    --scrollbar-thumb: light-dark(color-mix(in srgb, CanvasText 34%, transparent), color-mix(in srgb, CanvasText 42%, transparent));
+    --scrollbar-thumb-hover: light-dark(color-mix(in srgb, CanvasText 48%, transparent), color-mix(in srgb, CanvasText 58%, transparent));
 }
 html, body {
     width: 100%;
@@ -42,6 +45,28 @@ body {
     font-size: 12px;
     line-height: 1.5;
     -webkit-font-smoothing: antialiased;
+}
+body, .patch-file-body, .split-side {
+    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+body::-webkit-scrollbar, .patch-file-body::-webkit-scrollbar, .split-side::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+body::-webkit-scrollbar-track, .patch-file-body::-webkit-scrollbar-track, .split-side::-webkit-scrollbar-track {
+    background: var(--scrollbar-track);
+}
+body::-webkit-scrollbar-thumb, .patch-file-body::-webkit-scrollbar-thumb, .split-side::-webkit-scrollbar-thumb {
+    min-width: 28px;
+    min-height: 28px;
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background: var(--scrollbar-thumb);
+    background-clip: padding-box;
+}
+body::-webkit-scrollbar-thumb:hover, .patch-file-body::-webkit-scrollbar-thumb:hover, .split-side::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
+    background-clip: padding-box;
 }
 #root {
     box-sizing: border-box;

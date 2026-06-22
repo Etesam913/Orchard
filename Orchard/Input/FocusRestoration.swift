@@ -3,8 +3,8 @@ import Foundation
 
 /// Centralizes focus-restoration timing. Several code paths need to hand first
 /// responder to a terminal NSView *after* some AppKit/SwiftUI state has settled
-/// (command palette close, pane close + tree reshape, quick terminal show, tab
-/// switch). The common failure mode is calling `makeFirstResponder` before the
+/// (command palette close, pane close + tree reshape, tab switch). The common
+/// failure mode is calling `makeFirstResponder` before the
 /// NSView has been attached to a window or the new pane's NSView has been
 /// materialized by SwiftUI. This helper retries on the run loop until the view
 /// is in a window, with a bounded attempt cap so we never spin forever.

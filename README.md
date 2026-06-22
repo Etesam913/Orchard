@@ -12,10 +12,8 @@ SwiftUI/AppKit shell.
   (`SplitNode` tree), with Ctrl-Tab cycling that commits on Ctrl release.
 - **Command palette** — fuzzy palette over commands, projects, and
   directories (`Orchard/Palette/`).
-- **Quick terminal** — global drop-down terminal panel
-  (`QuickTerminal.swift`), independent of the main window.
 - **Diff sidebar** — live git diff of the active project rendered in a
-  WebKit-based viewer (`PierreDiffView` + `Resources/DiffViewer.html`) with
+  WebKit-based viewer (`PierreDiffView` + `DiffWebViewHTML.swift`) with
   copy and open-in-editor support. Refresh via the **Diff** menu (⌘R by
   default).
 - **Terminal search**, rebindable hotkeys (Settings → Keymaps; changes apply
@@ -96,8 +94,8 @@ Orchard/
 ├── Model/          Project, Workspace, SplitNode, diff & search state
 ├── Palette/        Command-palette engine and sources
 ├── Persistence/    Workspace/project storage (Application Support)
-├── Resources/      DiffViewer.html, bundled themes
-└── Views/          MainWindow, Sidebar, TerminalPane, QuickTerminal,
+├── Resources/      highlight.min.js, bundled themes
+└── Views/          MainWindow, Sidebar, TerminalPane,
                     DiffSidebar, CommandPalette, split tree, search bar
 ```
 

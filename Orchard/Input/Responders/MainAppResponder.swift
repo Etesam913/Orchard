@@ -2,7 +2,7 @@ import AppKit
 
 /// App-level hotkeys for the main window: split, close, focus, resize, tab
 /// cycling, project navigation, new tab, new project, Cmd+1-9 tab selection,
-/// etc. Runs after the palette and quick-terminal responders.
+/// etc. Runs after the palette responder.
 @MainActor
 final class MainAppResponder: KeyResponder {
     private let appState: AppState
@@ -26,14 +26,6 @@ final class MainAppResponder: KeyResponder {
         if appState.isCommandPaletteVisible { return .passThrough }
 
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-
-        // Quick-terminal toggle. The same shortcut is also a Carbon global
-        // hot key (see QuickTerminalService) for when Orchard isn't active;
-        // this branch covers the in-app case.
-        if HotkeyRegistry.matches(event, command: .toggleQuickTerminal) {
-            NotificationCenter.default.post(name: .toggleQuickTerminal, object: nil)
-            return .handled
-        }
 
         if HotkeyRegistry.matches(event, command: .recentTab) {
             guard let projectID = appState.activeProjectID else { return .passThrough }

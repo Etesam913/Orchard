@@ -13,6 +13,7 @@ struct SplitTreeView: View {
     let onSplit: (UUID, SplitDirection) -> Void
     let onClosePane: (UUID) -> Void
     let onToggleZoom: (UUID) -> Void
+    let onAssistantActivity: (String, UUID) -> Void
 
     init(
         node: SplitNode,
@@ -24,7 +25,8 @@ struct SplitTreeView: View {
         onFocusPane: @escaping (UUID) -> Void,
         onSplit: @escaping (UUID, SplitDirection) -> Void,
         onClosePane: @escaping (UUID) -> Void,
-        onToggleZoom: @escaping (UUID) -> Void = { _ in }
+        onToggleZoom: @escaping (UUID) -> Void = { _ in },
+        onAssistantActivity: @escaping (String, UUID) -> Void = { _, _ in }
     ) {
         self.node = node
         self.focusedPaneID = focusedPaneID
@@ -36,6 +38,7 @@ struct SplitTreeView: View {
         self.onSplit = onSplit
         self.onClosePane = onClosePane
         self.onToggleZoom = onToggleZoom
+        self.onAssistantActivity = onAssistantActivity
     }
 
     var body: some View {
@@ -49,7 +52,8 @@ struct SplitTreeView: View {
                 onFocus: { onFocusPane(pane.id) },
                 onProcessExit: { onClosePane(pane.id) },
                 onSplitRequest: { dir, _ in onSplit(pane.id, dir) },
-                onZoomRequest: { onToggleZoom(pane.id) }
+                onZoomRequest: { onToggleZoom(pane.id) },
+                onAssistantActivity: onAssistantActivity
             )
             .overlay {
                 if !isFocused, isSplit {
@@ -70,7 +74,8 @@ struct SplitTreeView: View {
                     onFocusPane: onFocusPane,
                     onSplit: onSplit,
                     onClosePane: onClosePane,
-                    onToggleZoom: onToggleZoom
+                    onToggleZoom: onToggleZoom,
+                    onAssistantActivity: onAssistantActivity
                 )
                 .id(branch.first.id)
             } second: {
@@ -84,7 +89,8 @@ struct SplitTreeView: View {
                     onFocusPane: onFocusPane,
                     onSplit: onSplit,
                     onClosePane: onClosePane,
-                    onToggleZoom: onToggleZoom
+                    onToggleZoom: onToggleZoom,
+                    onAssistantActivity: onAssistantActivity
                 )
                 .id(branch.second.id)
             }

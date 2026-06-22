@@ -4,6 +4,8 @@ import SwiftUI
 struct MainWindow: View {
     @Environment(AppState.self)
     private var appState
+    @Environment(\.accessibilityReduceMotion)
+    private var reduceMotion
     @Environment(ProjectStore.self)
     private var projectStore
     @State
@@ -12,6 +14,8 @@ struct MainWindow: View {
     private var diffModel = ProjectDiffModel()
     @State
     private var isDiffSidebarVisible = true
+    @State
+    private var isDiffSidebarInitiallyLoaded = false
     @State
     private var isDiffSearchVisible = false
     @State
@@ -43,10 +47,6 @@ struct MainWindow: View {
     // back to its `idealWidth` every time the user hides/shows it.
     @AppStorage("orchard.diffSidebar.width")
     private var diffSidebarWidth: Double = 425
-    // Side-by-side keeps its own remembered width and defaults a little
-    // narrower than unified — two columns otherwise crowd the editor.
-    @AppStorage("orchard.diffSidebar.splitWidth")
-    private var diffSplitSidebarWidth: Double = 450
     // Same story for the project (left) sidebar: NavigationSplitView resets
     // the column to its `idealWidth` whenever columnVisibility flips back
     // from .detailOnly to .automatic.
@@ -61,6 +61,7 @@ struct MainWindow: View {
     // width exactly.
     private let diffSidebarMinWidth: CGFloat = 480
     private let diffSplitSidebarMinWidth: CGFloat = 440
+    private let diffSidebarMaxWidth: CGFloat = 1200
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -83,130 +84,7 @@ struct MainWindow: View {
                     max: 280
                 )
         } detail: {
-            let project = activeProject
-            let diffState = diffModel.state
-            HSplitView {
-                ZStack {
-                    // The window's NSWindow.backgroundColor (set by WindowAppearance)
-                    // fills the detail column at the configured opacity. No need
-                    // to paint another tinted layer here; doing so stacks two
-                    // translucent fills and the detail reads as darker than the
-                    // strip around the sidebar.
-                    if let project = activeProjectWithWorkspace {
-                        if projectHasAnyTab(project) {
-                            WorkspaceView(project: project)
-                                .id(project.id)
-                        } else {
-                            EmptyProjectView(project: project)
-                                .id(project.id)
-                        }
-                    } else {
-                        WelcomeView()
-                    }
-                }
-                .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
-
-                if isDiffSidebarVisible {
-                    DiffSidebar(
-                        projectPath: project?.path ?? "",
-                        state: diffState,
-                        splitView: isDiffSplitView,
-                        searchQuery: diffSearchQuery,
-                        searchToken: diffSearchToken,
-                        searchNextToken: diffSearchNextToken,
-                        onSearchResult: { count, index in
-                            diffSearchMatchCount = count
-                            diffSearchMatchIndex = index
-                        }
-                    )
-                    .frame(
-                        minWidth: isDiffSplitView ? diffSplitSidebarMinWidth : diffSidebarMinWidth,
-                        idealWidth: isDiffSplitView ? diffSplitSidebarWidth : diffSidebarWidth,
-                        maxWidth: 1200
-                    )
-                    .background(
-                        GeometryReader { proxy in
-                            Color.clear.preference(
-                                key: DiffSidebarWidthKey.self,
-                                value: proxy.size.width
-                            )
-                        }
-                    )
-                    .onPreferenceChange(DiffSidebarWidthKey.self) { width in
-                        // Ignore the transient 0 frame during teardown so we
-                        // don't overwrite the last real width with garbage.
-                        guard width > 1 else { return }
-                        if isDiffSplitView { diffSplitSidebarWidth = width }
-                        else { diffSidebarWidth = width }
-                    }
-                    // Re-key on view mode so HSplitView re-applies the (narrower)
-                    // side-by-side idealWidth instead of holding the unified
-                    // divider position when the user toggles.
-                    .id(isDiffSplitView)
-                }
-            }
-            .task(id: activeProject?.id) {
-                diffModel.load(project: activeProject)
-                while !Task.isCancelled {
-                    try? await Task.sleep(for: .seconds(8))
-                    if Task.isCancelled { break }
-                    await diffModel.refresh()
-                }
-            }
-            .navigationTitle(activeProject?.name ?? "Orchard")
-            .navigationSubtitle(activeTabTitle)
-            .toolbar {
-                ToolbarItemGroup(placement: .primaryAction) {
-                    if isDiffSidebarVisible, !diffState.isLoading {
-                        if isDiffSearchVisible {
-                            DiffSearchField(
-                                query: $diffSearchQuery,
-                                matchCount: diffSearchMatchCount,
-                                matchIndex: diffSearchMatchIndex,
-                                // Track the diff panel's live width so the two
-                                // line up no matter how the divider is dragged.
-                                width: CGFloat(isDiffSplitView ? diffSplitSidebarWidth : diffSidebarWidth),
-                                focusTrigger: diffSearchFocusTrigger,
-                                onSubmit: { diffSearchNextToken += 1 },
-                                onClose: { closeDiffSearch() }
-                            )
-                        } else {
-                            DiffStatsToolbarLabel(stats: diffState.stats)
-                            Button {
-                                diffModel.load(project: project, revision: diffState.revision)
-                            } label: {
-                                Image(systemName: "arrow.clockwise")
-                            }
-                            .disabled(project == nil)
-                            .help("Refresh diff")
-                            Button {
-                                isDiffSearchVisible = true
-                                diffSearchFocusTrigger += 1
-                            } label: {
-                                Image(systemName: "magnifyingglass")
-                            }
-                            .disabled(project == nil)
-                            .help("Search diff")
-                            Button {
-                                isDiffSplitView.toggle()
-                            } label: {
-                                Image(systemName: isDiffSplitView ? "rectangle.split.2x1.fill" : "rectangle.split.2x1")
-                            }
-                            .disabled(project == nil)
-                            .help(isDiffSplitView ? "Switch to unified view" : "Switch to side-by-side view")
-                        }
-                    }
-                    Button {
-                        isDiffSidebarVisible.toggle()
-                    } label: {
-                        Label(
-                            isDiffSidebarVisible ? "Hide Changes" : "Show Changes",
-                            systemImage: "sidebar.right"
-                        )
-                    }
-                    .help(isDiffSidebarVisible ? "Hide changes sidebar" : "Show changes sidebar")
-                }
-            }
+            detailColumn
         }
         .background(WindowStyler())
         .overlay {
@@ -214,6 +92,19 @@ struct MainWindow: View {
                 CommandPaletteOverlay()
             }
         }
+        .overlay(alignment: .bottomLeading) {
+            if let toast = appState.assistantUpdateToast {
+                AssistantUpdateToast(item: toast)
+                    .padding(.leading, 14)
+                    .padding(.bottom, 14)
+                    .allowsHitTesting(false)
+                    .transition(reduceMotion ? .opacity : .move(edge: .leading).combined(with: .opacity))
+            }
+        }
+        .animation(
+            reduceMotion ? .easeInOut(duration: 0.16) : .spring(response: 0.28, dampingFraction: 0.86),
+            value: appState.assistantUpdateToast?.id
+        )
         .task {
             guard !appState.hasRestoredSelection else { return }
             appState.restoreSelection(projects: projectStore.projects)
@@ -228,12 +119,12 @@ struct MainWindow: View {
             diffModel.load(project: activeProject, revision: diffModel.state.revision)
         }
         .onReceive(NotificationCenter.default.publisher(for: .toggleDiffSidebar)) { _ in
-            isDiffSidebarVisible.toggle()
+            toggleDiffSidebar()
         }
         .onReceive(NotificationCenter.default.publisher(for: .focusDiffSearch)) { _ in
             // Cmd+F: reveal the diff sidebar and the search field if needed,
             // then focus it. If it's already open, just re-focus.
-            if !isDiffSidebarVisible { isDiffSidebarVisible = true }
+            setDiffSidebarVisible(true)
             isDiffSearchVisible = true
             diffSearchFocusTrigger += 1
         }
@@ -280,6 +171,156 @@ struct MainWindow: View {
         }
     }
 
+    // Broken out of `body` so each piece type-checks on its own. SwiftUI's
+    // `some View` inference times out when the whole detail column (workspace +
+    // diff sidebar + toolbar) is a single expression.
+    @ViewBuilder
+    private var detailColumn: some View {
+        let project = activeProject
+        let diffState = diffModel.state
+        HSplitView {
+            workspaceColumn
+            if isDiffSidebarVisible {
+                diffSidebarColumn(project: project, diffState: diffState)
+            }
+        }
+        .task(id: activeProject?.id) {
+            diffModel.load(project: activeProject)
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(8))
+                if Task.isCancelled { break }
+                await diffModel.refresh()
+            }
+        }
+        .navigationTitle(activeProject?.name ?? "Orchard")
+        .navigationSubtitle(activeTabTitle)
+        .toolbar {
+            detailToolbar(project: project, diffState: diffState)
+        }
+    }
+
+    @ViewBuilder
+    private var workspaceColumn: some View {
+        ZStack {
+            // The window's NSWindow.backgroundColor (set by WindowAppearance)
+            // fills the detail column at the configured opacity. No need
+            // to paint another tinted layer here; doing so stacks two
+            // translucent fills and the detail reads as darker than the
+            // strip around the sidebar.
+            if let project = activeProjectWithWorkspace {
+                if projectHasAnyTab(project) {
+                    WorkspaceView(project: project)
+                        .id(project.id)
+                } else {
+                    EmptyProjectView(project: project)
+                        .id(project.id)
+                }
+            } else {
+                WelcomeView()
+            }
+        }
+        .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder
+    private func diffSidebarColumn(project: Project?, diffState: ProjectDiff) -> some View {
+        DiffSidebar(
+            projectPath: project?.path ?? "",
+            state: diffState,
+            splitView: isDiffSplitView,
+            searchQuery: diffSearchQuery,
+            searchToken: diffSearchToken,
+            searchNextToken: diffSearchNextToken,
+            onSearchResult: { count, index in
+                diffSearchMatchCount = count
+                diffSearchMatchIndex = index
+            }
+        )
+        // Before the sidebar has finished its first layout, pin it to the saved
+        // width by collapsing min == max; afterwards relax to the draggable
+        // range. Keeping a single `frame(minWidth:maxWidth:)` overload across
+        // both states avoids a view-identity change that would reload the diff
+        // WebView.
+        .frame(
+            minWidth: sidebarWidthLimit ?? activeDiffSidebarMinWidth,
+            maxWidth: sidebarWidthLimit ?? diffSidebarMaxWidth
+        )
+        .background(
+            GeometryReader { proxy in
+                Color.clear.preference(
+                    key: DiffSidebarWidthKey.self,
+                    value: proxy.size.width
+                )
+            }
+        )
+        .onPreferenceChange(DiffSidebarWidthKey.self) { width in
+            // Ignore the transient 0 frame during teardown so we
+            // don't overwrite the last real width with garbage.
+            guard isDiffSidebarVisible else { return }
+            guard width >= activeDiffSidebarMinWidth, width <= diffSidebarMaxWidth else { return }
+            diffSidebarWidth = width
+        }
+        .onAppear {
+            DispatchQueue.main.async {
+                isDiffSidebarInitiallyLoaded = true
+            }
+        }
+    }
+
+    @ToolbarContentBuilder
+    private func detailToolbar(project: Project?, diffState: ProjectDiff) -> some ToolbarContent {
+        ToolbarItemGroup(placement: .primaryAction) {
+            if isDiffSidebarVisible, !diffState.isLoading {
+                if isDiffSearchVisible {
+                    DiffSearchField(
+                        query: $diffSearchQuery,
+                        matchCount: diffSearchMatchCount,
+                        matchIndex: diffSearchMatchIndex,
+                        // Track the diff panel's live width so the two
+                        // line up no matter how the divider is dragged.
+                        width: resolvedDiffSidebarWidth,
+                        focusTrigger: diffSearchFocusTrigger,
+                        onSubmit: { diffSearchNextToken += 1 },
+                        onClose: { closeDiffSearch() }
+                    )
+                } else {
+                    DiffStatsToolbarLabel(stats: diffState.stats)
+                    Button {
+                        diffModel.load(project: project, revision: diffState.revision)
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .disabled(project == nil)
+                    .help("Refresh diff")
+                    Button {
+                        isDiffSearchVisible = true
+                        diffSearchFocusTrigger += 1
+                    } label: {
+                        Image(systemName: "magnifyingglass")
+                    }
+                    .disabled(project == nil)
+                    .help("Search diff")
+                    Button {
+                        isDiffSplitView.toggle()
+                    } label: {
+                        Image(systemName: isDiffSplitView ? "rectangle.split.2x1.fill" : "rectangle.split.2x1")
+                    }
+                    .disabled(project == nil)
+                    .help(isDiffSplitView ? "Switch to unified view" : "Switch to side-by-side view")
+                }
+            }
+            Button {
+                toggleDiffSidebar()
+            } label: {
+                Label(
+                    isDiffSidebarVisible ? "Hide Changes" : "Show Changes",
+                    systemImage: "sidebar.right"
+                )
+            }
+            .help(isDiffSidebarVisible ? "Hide changes sidebar" : "Show changes sidebar")
+        }
+    }
+
     private func closeDiffSearch() {
         diffSearchDebounce?.cancel()
         isDiffSearchVisible = false
@@ -288,6 +329,30 @@ struct MainWindow: View {
         diffSearchMatchIndex = 0
         // Bump the token with an empty query so the WebView clears highlights.
         diffSearchToken += 1
+    }
+
+    private func toggleDiffSidebar() {
+        setDiffSidebarVisible(!isDiffSidebarVisible)
+    }
+
+    private func setDiffSidebarVisible(_ visible: Bool) {
+        guard visible != isDiffSidebarVisible else { return }
+        isDiffSidebarVisible = visible
+        if !visible {
+            isDiffSidebarInitiallyLoaded = false
+        }
+    }
+
+    private var activeDiffSidebarMinWidth: CGFloat {
+        isDiffSplitView ? diffSplitSidebarMinWidth : diffSidebarMinWidth
+    }
+
+    private var resolvedDiffSidebarWidth: CGFloat {
+        min(max(CGFloat(diffSidebarWidth), activeDiffSidebarMinWidth), diffSidebarMaxWidth)
+    }
+
+    private var sidebarWidthLimit: CGFloat? {
+        isDiffSidebarInitiallyLoaded ? nil : resolvedDiffSidebarWidth
     }
 
     private var activeProject: Project? {
@@ -335,7 +400,15 @@ struct WorkspaceView: View {
                     appState.saveWorkspaces()
                 },
                 onClosePane: { appState.requestClosePane($0, projectID: project.id) },
-                onToggleZoom: { tab.toggleZoom(paneID: $0) }
+                onToggleZoom: { tab.toggleZoom(paneID: $0) },
+                onAssistantActivity: { assistant, paneID in
+                    appState.recordAssistantUpdate(
+                        assistant: assistant,
+                        paneID: paneID,
+                        projectID: project.id,
+                        tabID: tab.id
+                    )
+                }
             )
             .id(renderedNode.id)
             .overlay(alignment: .topTrailing) {

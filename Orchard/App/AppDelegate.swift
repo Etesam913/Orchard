@@ -26,7 +26,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate()
         _ = GhosttyApp.shared
         GhosttyApp.shared.installAppearanceTracking()
-        _ = QuickTerminalService.shared
         KeyRouter.shared.install()
         // Dock-icon click on a hidden window: SwiftUI's
         // @NSApplicationDelegateAdaptor swallows applicationShouldHandleReopen,
@@ -62,13 +61,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Called from OrchardApp.onAppear once the state objects exist. Registers
-    /// responders in priority order: palette first, quick terminal second,
-    /// main app last.
+    /// responders in priority order: palette first, main app last.
     func installResponders(appState: AppState, projectStore: ProjectStore) {
         guard !hasInstalledResponders else { return }
         hasInstalledResponders = true
         KeyRouter.shared.register(PaletteResponder(appState: appState))
-        KeyRouter.shared.register(QuickTerminalResponder())
         let mainResponder = MainAppResponder(appState: appState, projectStore: projectStore)
         mainResponder.mainWindow = mainWindow
         mainAppResponder = mainResponder
@@ -96,9 +93,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     tab.splitRoot.allPanes().contains { $0.nsView?.needsConfirmQuit() == true }
                 }
             } ?? false
-        let qtHasRunning = QuickTerminalService.shared.splitState.splitRoot
-            .allPanes().contains { $0.nsView?.needsConfirmQuit() == true }
-        let hasRunning = mainHasRunning || qtHasRunning
+        let hasRunning = mainHasRunning
 
         if !hasRunning {
             AppTerminationState.isTerminating = true
@@ -138,7 +133,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Find the hidden main window. Don't filter on `canBecomeMain` — AppKit
         // reports that as false for ordered-out SwiftUI windows (which is
         // exactly the case we're handling). Filter on class instead: skip
-        // panels (quick terminal, settings).
+        // panels (settings).
         let target = NSApp.windows.first { window in
             !window.isVisible && !(window is NSPanel)
         } ?? mainWindow

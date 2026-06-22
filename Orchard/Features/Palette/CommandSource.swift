@@ -149,8 +149,6 @@ struct CommandSource: PaletteSource {
             return nil
         case .reloadGhosttyConfig:
             action = { GhosttyApp.shared.reloadAndReport() }
-        case .toggleQuickTerminal:
-            action = { QuickTerminalService.shared.toggle() }
         case .refreshDiff:
             action = { NotificationCenter.default.post(name: .refreshDiff, object: nil) }
         case .focusDiffSearch:

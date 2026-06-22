@@ -13,6 +13,7 @@ struct TerminalSurface: NSViewRepresentable {
     let onProcessExit: () -> Void
     let onSplitRequest: (SplitDirection, SplitPosition) -> Void
     let onZoomRequest: () -> Void
+    let onAssistantActivity: (String, UUID) -> Void
 
     final class Coordinator {
         var wasFocused = false
@@ -94,15 +95,25 @@ struct TerminalSurface: NSViewRepresentable {
         }
         view.onSearchTotal = { [weak pane] total in pane?.searchState.total = total }
         view.onSearchSelected = { [weak pane] sel in pane?.searchState.selected = sel }
-        view.onCommandSubmitted = { [weak pane] command in
-            pane?.didSubmitCommand(command)
+        view.onCommandSubmitted = { [weak pane, weak view] command in
+            guard let pane, let assistant = pane.didSubmitCommand(command) else { return }
+            view?.startAssistantOutputMonitor(assistant: assistant)
         }
-        view.onCommandFinished = { [weak pane] in
+        view.onCommandFinished = { [weak pane, weak view] in
             pane?.isAssistantQueryRunning = false
             pane?.assistantProcessName = nil
+            view?.stopAssistantOutputMonitor()
+        }
+        view.onAssistantOutputActivity = { [weak pane] assistant in
+            guard let pane else { return }
+            onAssistantActivity(assistant, pane.id)
         }
         view.onProgressActivityChange = { [weak pane] isRunning in
-            pane?.isAssistantQueryRunning = isRunning
+            guard let pane else { return }
+            pane.isAssistantQueryRunning = isRunning
+            if isRunning, let assistant = pane.assistantProcessName {
+                onAssistantActivity(assistant, pane.id)
+            }
         }
     }
 }

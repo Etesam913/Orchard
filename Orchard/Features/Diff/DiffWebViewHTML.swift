@@ -340,6 +340,8 @@ mark.orchard-search-hit.current {
 
     // false = unified (single column), true = side-by-side. Set per render.
     let splitView = false;
+    let projectPath = "";
+    const collapsedFiles = new Set();
 
     // Fill a content cell with syntax-highlighted markup, falling back to plain
     // text for unknown languages, the no-newline marker, or a highlight failure.
@@ -668,6 +670,7 @@ mark.orchard-search-hit.current {
         const fullPath = file.mode === "renamed" && file.oldPath && file.newPath && file.oldPath !== file.newPath
             ? `${file.oldPath} -> ${file.newPath}`
             : (file.newPath || file.oldPath || "(unknown)");
+        section.dataset.fileKey = collapsedFileKey(fullPath);
         const shortPath = file.mode === "renamed" && file.oldPath && file.newPath && file.oldPath !== file.newPath
             ? `${shortenPath(file.oldPath)} -> ${shortenPath(file.newPath)}`
             : shortenPath(fullPath);
@@ -751,16 +754,31 @@ mark.orchard-search-hit.current {
             body.appendChild(table);
         }
         section.appendChild(body);
+        setSectionCollapsed(section, toggle, collapsedFiles.has(section.dataset.fileKey));
         toggle.addEventListener("click", () => {
-            const collapsed = section.classList.toggle("collapsed");
-            toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+            setSectionCollapsed(section, toggle, !section.classList.contains("collapsed"));
         });
         return section;
+    }
+
+    function setSectionCollapsed(section, toggle, collapsed) {
+        section.classList.toggle("collapsed", collapsed);
+        toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+
+        const key = section.dataset.fileKey;
+        if (!key) return;
+        if (collapsed) collapsedFiles.add(key);
+        else collapsedFiles.delete(key);
+    }
+
+    function collapsedFileKey(path) {
+        return JSON.stringify([projectPath, path]);
     }
 
     function render(payload) {
         const diff = payload?.diff || "";
         splitView = !!payload?.split;
+        projectPath = payload?.projectPath || "";
         const r = root();
         r.innerHTML = "";
         if (!diff.trim()) {
@@ -821,9 +839,8 @@ mark.orchard-search-hit.current {
         // Reveal the match if its file section is collapsed.
         const section = mark.closest(".patch-file");
         if (section && section.classList.contains("collapsed")) {
-            section.classList.remove("collapsed");
             const toggle = section.querySelector(".patch-file-toggle");
-            if (toggle) toggle.setAttribute("aria-expanded", "true");
+            if (toggle) setSectionCollapsed(section, toggle, false);
         }
         mark.scrollIntoView({ block: "center", inline: "nearest" });
     }

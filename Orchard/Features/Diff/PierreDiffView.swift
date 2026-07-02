@@ -162,7 +162,7 @@ struct PierreDiffView: NSViewRepresentable {
             guard isPageLoaded, let webView, let diff = pendingDiff else { return }
 
             let split = pendingSplit
-            let payload: [String: Any] = ["diff": diff, "split": split]
+            let payload: [String: Any] = ["diff": diff, "split": split, "projectPath": projectPath]
             guard let data = try? JSONSerialization.data(withJSONObject: payload),
                   let json = String(data: data, encoding: .utf8)
             else {

@@ -26,7 +26,6 @@ final class GhosttyTerminalNSView: NSView {
     var onCommandSubmitted: ((String) -> Void)?
     var onCommandFinished: (() -> Void)?
     var onProgressActivityChange: ((Bool) -> Void)?
-    var onAssistantOutputActivity: ((String) -> Void)?
     var isFocused: Bool = false
     var currentPwd: String?
 
@@ -35,8 +34,6 @@ final class GhosttyTerminalNSView: NSView {
     var keyTextAccumulator: [String] = []
     var currentKeyEvent: NSEvent?
     var commandLineBuffer = ""
-    private var assistantOutputMonitorTask: Task<Void, Never>?
-    private var assistantOutputDigest: UInt64?
 
     init(workingDirectory: String) {
         self.workingDirectory = workingDirectory
@@ -113,7 +110,6 @@ final class GhosttyTerminalNSView: NSView {
     }
 
     func destroySurface() {
-        stopAssistantOutputMonitor()
         isDestroyed = true
         if let surface { ghostty_surface_free(surface) }
         surface = nil
@@ -219,64 +215,6 @@ final class GhosttyTerminalNSView: NSView {
     func notifySurfaceUnfocused() {
         guard let surface else { return }
         ghostty_surface_set_focus(surface, false)
-    }
-
-    func startAssistantOutputMonitor(assistant: String) {
-        assistantOutputMonitorTask?.cancel()
-        assistantOutputDigest = visibleTextDigest()
-        assistantOutputMonitorTask = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(600))
-                guard let self else { return }
-                guard let digest = self.visibleTextDigest() else { continue }
-                if let previous = self.assistantOutputDigest, previous != digest {
-                    self.assistantOutputDigest = digest
-                    self.onAssistantOutputActivity?(assistant)
-                } else if self.assistantOutputDigest == nil {
-                    self.assistantOutputDigest = digest
-                }
-            }
-        }
-    }
-
-    func stopAssistantOutputMonitor() {
-        assistantOutputMonitorTask?.cancel()
-        assistantOutputMonitorTask = nil
-        assistantOutputDigest = nil
-    }
-
-    private func visibleTextDigest() -> UInt64? {
-        guard let surface else { return nil }
-        let size = ghostty_surface_size(surface)
-        guard size.width_px > 0, size.height_px > 0 else { return nil }
-
-        let selection = ghostty_selection_s(
-            top_left: ghostty_point_s(
-                tag: GHOSTTY_POINT_SURFACE,
-                coord: GHOSTTY_POINT_COORD_TOP_LEFT,
-                x: 0,
-                y: 0
-            ),
-            bottom_right: ghostty_point_s(
-                tag: GHOSTTY_POINT_SURFACE,
-                coord: GHOSTTY_POINT_COORD_BOTTOM_RIGHT,
-                x: size.width_px,
-                y: size.height_px
-            ),
-            rectangle: true
-        )
-        var text = ghostty_text_s()
-        guard ghostty_surface_read_text(surface, selection, &text) else { return nil }
-        defer { ghostty_surface_free_text(surface, &text) }
-        guard let ptr = text.text, text.text_len > 0 else { return 0 }
-
-        var hash: UInt64 = 14_695_981_039_346_656_037
-        let bytes = UnsafeBufferPointer(start: ptr, count: Int(text.text_len))
-        for byte in bytes {
-            hash ^= UInt64(UInt8(bitPattern: byte))
-            hash &*= 1_099_511_628_211
-        }
-        return hash
     }
 
     // MARK: - First responder

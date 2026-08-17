@@ -9,7 +9,6 @@ struct TerminalPane: View {
     let onProcessExit: () -> Void
     let onSplitRequest: (SplitDirection, SplitPosition) -> Void
     let onZoomRequest: () -> Void
-    let onAssistantActivity: (String, UUID) -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -36,8 +35,7 @@ struct TerminalPane: View {
                 onFocus: onFocus,
                 onProcessExit: onProcessExit,
                 onSplitRequest: onSplitRequest,
-                onZoomRequest: onZoomRequest,
-                onAssistantActivity: onAssistantActivity
+                onZoomRequest: onZoomRequest
             )
         }
     }

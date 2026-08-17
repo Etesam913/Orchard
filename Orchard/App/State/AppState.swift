@@ -18,7 +18,6 @@ final class AppState {
     var postPaletteAction: (() -> Void)?
     var renamingTabID: UUID?
     var renamingProjectID: UUID?
-    var assistantUpdateToast: AssistantUpdateToastItem?
     /// Set once on first restore. Settable from `AppState+Projects`, so internal.
     var hasRestoredSelection = false
 
@@ -27,10 +26,6 @@ final class AppState {
     @ObservationIgnored
     var projectRecency = RecencyStack<UUID>(limit: 50)
     let recencyKey = "orchard.projectRecency"
-    @ObservationIgnored
-    var assistantToastDismissTask: Task<Void, Never>?
-    @ObservationIgnored
-    var assistantToastLastShownAt: [UUID: Date] = [:]
 
     struct PendingClosePane: Equatable {
         let paneID: UUID

@@ -92,19 +92,7 @@ struct MainWindow: View {
                 CommandPaletteOverlay()
             }
         }
-        .overlay(alignment: .bottomLeading) {
-            if let toast = appState.assistantUpdateToast {
-                AssistantUpdateToast(item: toast)
-                    .padding(.leading, 14)
-                    .padding(.bottom, 14)
-                    .allowsHitTesting(false)
-                    .transition(reduceMotion ? .opacity : .move(edge: .leading).combined(with: .opacity))
-            }
-        }
-        .animation(
-            reduceMotion ? .easeInOut(duration: 0.16) : .spring(response: 0.28, dampingFraction: 0.86),
-            value: appState.assistantUpdateToast?.id
-        )
+
         .task {
             guard !appState.hasRestoredSelection else { return }
             appState.restoreSelection(projects: projectStore.projects)
@@ -400,15 +388,7 @@ struct WorkspaceView: View {
                     appState.saveWorkspaces()
                 },
                 onClosePane: { appState.requestClosePane($0, projectID: project.id) },
-                onToggleZoom: { tab.toggleZoom(paneID: $0) },
-                onAssistantActivity: { assistant, paneID in
-                    appState.recordAssistantUpdate(
-                        assistant: assistant,
-                        paneID: paneID,
-                        projectID: project.id,
-                        tabID: tab.id
-                    )
-                }
+                onToggleZoom: { tab.toggleZoom(paneID: $0) }
             )
             .id(renderedNode.id)
             .overlay(alignment: .topTrailing) {

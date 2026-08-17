@@ -83,6 +83,26 @@ enum ProjectDiffService {
         return stats
     }
 
+    // GUI apps launched from Finder/Dock inherit only the bare system PATH
+    // (/usr/bin:/bin:/usr/sbin:/sbin), which misses Homebrew and cargo
+    // installs of jj/git. Without this, `env jj` exits 127 and the diff
+    // sidebar silently falls back to git — or shows nothing in non-colocated
+    // jj workspaces that have no .git directory.
+    private static let augmentedEnvironment: [String: String] = {
+        var env = ProcessInfo.processInfo.environment
+        let extraDirs = [
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            (NSHomeDirectory() as NSString).appendingPathComponent(".cargo/bin"),
+        ]
+        var components = (env["PATH"] ?? "").split(separator: ":").map(String.init)
+        for dir in extraDirs where !components.contains(dir) {
+            components.append(dir)
+        }
+        env["PATH"] = components.joined(separator: ":")
+        return env
+    }()
+
     private static func run(_ executable: String, arguments: [String], currentDirectory: String) async -> (exitCode: Int32, output: String) {
         await withCheckedContinuation { (continuation: CheckedContinuation<(Int32, String), Never>) in
             DispatchQueue.global(qos: .userInitiated).async {
@@ -90,6 +110,7 @@ enum ProjectDiffService {
                 process.executableURL = URL(fileURLWithPath: executable)
                 process.arguments = arguments
                 process.currentDirectoryURL = URL(fileURLWithPath: currentDirectory)
+                process.environment = augmentedEnvironment
 
                 let pipe = Pipe()
                 process.standardOutput = pipe
